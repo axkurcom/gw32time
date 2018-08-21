@@ -6,6 +6,7 @@
 #include "../core/error.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
+#include "../core/w32time.h"
 
 #define GW32TIME_VERSION L"0.0.1"
 
@@ -25,6 +26,7 @@ static void print_help(void)
     wprintf(L"Usage:\n");
     wprintf(L"  gw32time --help\n");
     wprintf(L"  gw32time --version\n");
+    wprintf(L"  gw32time status\n");
     wprintf(L"  gw32time service status\n");
 }
 
@@ -63,6 +65,75 @@ static int print_service_status(void)
     return 0;
 }
 
+static void print_admin_block(void)
+{
+    int is_admin = 0;
+
+    wprintf(L"\nPrivileges:\n");
+    if (privilege_is_admin(&is_admin) != 0) {
+        wprintf(L"  Admin:   unknown\n");
+        return;
+    }
+
+    wprintf(L"  Admin:   %ls\n", is_admin ? L"yes" : L"no");
+}
+
+static void print_server_summary(const wchar_t *raw)
+{
+    ntp_peer_list_t peers;
+    int i;
+
+    if (raw == NULL || raw[0] == L'\0') {
+        wprintf(L"Servers:  (none)\n");
+        return;
+    }
+
+    if (ntp_parse_peer_list(raw, &peers) != 0 || peers.count == 0) {
+        wprintf(L"Servers:  %ls\n", raw);
+        return;
+    }
+
+    wprintf(L"Servers:  ");
+    for (i = 0; i < peers.count; i++) {
+        wprintf(L"%ls%ls", i > 0 ? L", " : L"", peers.peers[i].host);
+    }
+    wprintf(L"\n");
+}
+
+static int print_status(void)
+{
+    svc_state_t state = SVC_STATE_UNKNOWN;
+    svc_start_type_t start_type = SVC_START_UNKNOWN;
+    w32time_config_t config;
+
+    if (svc_query_state(L"w32time", &state) != 0) {
+        state = SVC_STATE_UNKNOWN;
+    }
+
+    if (svc_query_start_type(L"w32time", &start_type) != 0) {
+        start_type = SVC_START_UNKNOWN;
+    }
+
+    if (w32time_read_config(&config) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    wprintf(L"GW32TIME\n");
+    wprintf(L"Graphical UI for Windows Time Service\n\n");
+    wprintf(L"Service:  %ls\n", svc_state_name(state));
+    wprintf(L"Start:    %ls\n", svc_start_type_name(start_type));
+    wprintf(L"Type:     %ls\n", config.type[0] ? config.type : L"unknown");
+    print_server_summary(config.ntp_server);
+    if (config.has_special_poll_interval) {
+        wprintf(L"Poll:     %lu sec\n", (unsigned long)config.special_poll_interval);
+    } else {
+        wprintf(L"Poll:     unknown\n");
+    }
+    print_admin_block();
+    return 0;
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -82,6 +153,10 @@ int cli_dispatch(int argc, wchar_t **argv)
 
     if (arg_is(argv[1], L"--admin")) {
         return print_admin_status();
+    }
+
+    if (arg_is(argv[1], L"status")) {
+        return print_status();
     }
 
     if (arg_is(argv[1], L"service")) {
