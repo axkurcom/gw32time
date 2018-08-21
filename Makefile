@@ -6,7 +6,8 @@ SRC := \
 	src/main.c \
 	src/cli/cli.c \
 	src/core/error.c \
-	src/core/privilege.c
+	src/core/privilege.c \
+	src/core/service.c
 
 CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -DUNICODE -D_UNICODE
 LDFLAGS := -municode -ladvapi32
