@@ -7,6 +7,7 @@
 #include "../core/privilege.h"
 #include "../core/service.h"
 #include "../core/w32time.h"
+#include "../core/w32tm.h"
 
 #define GW32TIME_VERSION L"0.0.1"
 
@@ -26,7 +27,8 @@ static void print_help(void)
     wprintf(L"Usage:\n");
     wprintf(L"  gw32time --help\n");
     wprintf(L"  gw32time --version\n");
-    wprintf(L"  gw32time status\n");
+    wprintf(L"  gw32time status [--raw]\n");
+    wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
 }
 
@@ -100,7 +102,25 @@ static void print_server_summary(const wchar_t *raw)
     wprintf(L"\n");
 }
 
-static int print_status(void)
+static void print_w32tm_block(const wchar_t *title, int (*query)(w32tm_raw_result_t *))
+{
+    w32tm_raw_result_t result;
+
+    wprintf(L"\n%ls:\n", title);
+    if (query(&result) != 0) {
+        error_print_last(title);
+        return;
+    }
+
+    wprintf(L"  Exit code: %lu\n", (unsigned long)result.exit_code);
+    if (result.raw[0] != L'\0') {
+        wprintf(L"%ls\n", result.raw);
+    } else {
+        wprintf(L"  (no output)\n");
+    }
+}
+
+static int print_status(int raw)
 {
     svc_state_t state = SVC_STATE_UNKNOWN;
     svc_start_type_t start_type = SVC_START_UNKNOWN;
@@ -131,6 +151,29 @@ static int print_status(void)
         wprintf(L"Poll:     unknown\n");
     }
     print_admin_block();
+
+    if (raw) {
+        print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
+    }
+
+    return 0;
+}
+
+static int print_diag(void)
+{
+    int rc;
+
+    wprintf(L"Windows Time Diagnostics\n");
+    wprintf(L"========================\n\n");
+
+    rc = print_status(0);
+    if (rc != 0) {
+        return rc;
+    }
+
+    print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
+    print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
+    print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
     return 0;
 }
 
@@ -156,7 +199,11 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"status")) {
-        return print_status();
+        return print_status(argc >= 3 && arg_is(argv[2], L"--raw"));
+    }
+
+    if (arg_is(argv[1], L"diag")) {
+        return print_diag();
     }
 
     if (arg_is(argv[1], L"service")) {

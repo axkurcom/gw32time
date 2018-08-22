@@ -9,6 +9,7 @@ SRC := \
 	src/core/privilege.c \
 	src/core/registry.c \
 	src/core/w32time.c \
+	src/core/w32tm.c \
 	src/core/service.c
 
 CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -DUNICODE -D_UNICODE
