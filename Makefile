@@ -5,6 +5,7 @@ TARGET := gw32time.exe
 SRC := \
 	src/main.c \
 	src/cli/cli.c \
+	src/core/diagnostics.c \
 	src/core/error.c \
 	src/core/privilege.c \
 	src/core/registry.c \

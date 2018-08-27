@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <wchar.h>
 
+#include "../core/diagnostics.h"
 #include "../core/error.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
@@ -28,6 +29,7 @@ static void print_help(void)
     wprintf(L"  gw32time --help\n");
     wprintf(L"  gw32time --version\n");
     wprintf(L"  gw32time status [--raw]\n");
+    wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
 }
@@ -162,6 +164,7 @@ static int print_status(int raw)
 static int print_diag(void)
 {
     int rc;
+    health_t health;
 
     wprintf(L"Windows Time Diagnostics\n");
     wprintf(L"========================\n\n");
@@ -171,10 +174,30 @@ static int print_diag(void)
         return rc;
     }
 
+    if (diagnostics_evaluate_health(&health) == 0) {
+        wprintf(L"\nHealth:\n");
+        wprintf(L"  State:  %ls\n", health_state_name(health.state));
+        wprintf(L"  Reason: %ls\n", health.reason);
+    }
+
     print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
     print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
     print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
     return 0;
+}
+
+static int print_health(void)
+{
+    health_t health;
+
+    if (diagnostics_evaluate_health(&health) != 0) {
+        error_print_last(L"Evaluate health");
+        return 1;
+    }
+
+    wprintf(L"Health: %ls\n", health_state_name(health.state));
+    wprintf(L"Reason: %ls\n", health.reason);
+    return health.state == HEALTH_BROKEN ? 1 : 0;
 }
 
 int cli_dispatch(int argc, wchar_t **argv)
@@ -204,6 +227,10 @@ int cli_dispatch(int argc, wchar_t **argv)
 
     if (arg_is(argv[1], L"diag")) {
         return print_diag();
+    }
+
+    if (arg_is(argv[1], L"health")) {
+        return print_health();
     }
 
     if (arg_is(argv[1], L"service")) {
