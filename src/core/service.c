@@ -42,17 +42,17 @@ static svc_start_type_t map_start_type(DWORD start_type)
     }
 }
 
-static SC_HANDLE open_service_for_query(const wchar_t *name, DWORD access, SC_HANDLE *scm)
+static SC_HANDLE open_service_handle(const wchar_t *name, DWORD manager_access, DWORD service_access, SC_HANDLE *scm)
 {
     SC_HANDLE manager;
     SC_HANDLE service;
 
-    manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    manager = OpenSCManagerW(NULL, NULL, manager_access);
     if (manager == NULL) {
         return NULL;
     }
 
-    service = OpenServiceW(manager, name, access);
+    service = OpenServiceW(manager, name, service_access);
     if (service == NULL) {
         DWORD last_error = GetLastError();
         CloseServiceHandle(manager);
@@ -62,6 +62,11 @@ static SC_HANDLE open_service_for_query(const wchar_t *name, DWORD access, SC_HA
 
     *scm = manager;
     return service;
+}
+
+static SC_HANDLE open_service_for_query(const wchar_t *name, DWORD access, SC_HANDLE *scm)
+{
+    return open_service_handle(name, SC_MANAGER_CONNECT, access, scm);
 }
 
 int svc_query_state(const wchar_t *name, svc_state_t *out)
@@ -148,6 +153,38 @@ int svc_query_start_type(const wchar_t *name, svc_start_type_t *out)
 
     *out = map_start_type(config->dwStartType);
     free(config);
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return 0;
+}
+
+int svc_start(const wchar_t *name)
+{
+    SC_HANDLE scm;
+    SC_HANDLE service;
+    DWORD last_error;
+
+    if (name == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    service = open_service_handle(name, SC_MANAGER_CONNECT, SERVICE_START, &scm);
+    if (service == NULL) {
+        return -1;
+    }
+
+    if (!StartServiceW(service, 0, NULL)) {
+        last_error = GetLastError();
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        if (last_error == ERROR_SERVICE_ALREADY_RUNNING) {
+            return 0;
+        }
+        SetLastError(last_error);
+        return -1;
+    }
+
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
     return 0;

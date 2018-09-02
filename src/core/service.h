@@ -25,6 +25,7 @@ typedef enum {
 
 int svc_query_state(const wchar_t *name, svc_state_t *out);
 int svc_query_start_type(const wchar_t *name, svc_start_type_t *out);
+int svc_start(const wchar_t *name);
 
 const wchar_t *svc_state_name(svc_state_t state);
 const wchar_t *svc_start_type_name(svc_start_type_t start_type);

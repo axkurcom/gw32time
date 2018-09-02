@@ -32,6 +32,7 @@ static void print_help(void)
     wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
+    wprintf(L"  gw32time sync [--yes]\n");
 }
 
 static int print_admin_status(void)
@@ -200,6 +201,87 @@ static int print_health(void)
     return health.state == HEALTH_BROKEN ? 1 : 0;
 }
 
+static int has_arg(int argc, wchar_t **argv, const wchar_t *value)
+{
+    int i;
+
+    for (i = 2; i < argc; i++) {
+        if (arg_is(argv[i], value)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int confirm_action(const wchar_t *prompt, int assume_yes)
+{
+    wchar_t answer[16];
+
+    if (assume_yes) {
+        return 1;
+    }
+
+    wprintf(L"%ls [y/N] ", prompt);
+    if (fgetws(answer, sizeof(answer) / sizeof(answer[0]), stdin) == NULL) {
+        return 0;
+    }
+
+    return answer[0] == L'y' || answer[0] == L'Y';
+}
+
+static int run_sync_now(int argc, wchar_t **argv)
+{
+    int is_admin = 0;
+    int assume_yes = has_arg(argc, argv, L"--yes");
+    svc_state_t state = SVC_STATE_UNKNOWN;
+    w32tm_raw_result_t result;
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"Sync requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (svc_query_state(L"w32time", &state) != 0) {
+        error_print_last(L"Query service state");
+        return 1;
+    }
+
+    if (state != SVC_STATE_RUNNING) {
+        wprintf(L"Windows Time service is %ls.\n", svc_state_name(state));
+        if (!confirm_action(L"Start Windows Time service before resync?", assume_yes)) {
+            wprintf(L"Sync cancelled.\n");
+            return 1;
+        }
+
+        if (svc_start(L"w32time") != 0) {
+            error_print_last(L"Start Windows Time service");
+            return 1;
+        }
+        Sleep(1200);
+    }
+
+    wprintf(L"Requesting Windows Time resync...\n\n");
+    if (w32tm_resync_raw(&result) != 0) {
+        error_print_last(L"w32tm /resync");
+        return 1;
+    }
+
+    if (result.raw[0] != L'\0') {
+        wprintf(L"%ls\n", result.raw);
+    }
+
+    if (result.exit_code != 0) {
+        fwprintf(stderr, L"Resync failed with exit code %lu.\n", (unsigned long)result.exit_code);
+        fwprintf(stderr, L"Try 'gw32time diag' for service, peer, and configuration details.\n");
+        return 1;
+    }
+
+    wprintf(L"Resync requested.\n");
+    print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
+    return 0;
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -231,6 +313,10 @@ int cli_dispatch(int argc, wchar_t **argv)
 
     if (arg_is(argv[1], L"health")) {
         return print_health();
+    }
+
+    if (arg_is(argv[1], L"sync")) {
+        return run_sync_now(argc, argv);
     }
 
     if (arg_is(argv[1], L"service")) {

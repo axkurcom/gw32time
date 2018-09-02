@@ -226,3 +226,8 @@ int w32tm_query_configuration_raw(w32tm_raw_result_t *out)
 {
     return w32tm_query_raw(L"w32tm /query /configuration", out);
 }
+
+int w32tm_resync_raw(w32tm_raw_result_t *out)
+{
+    return w32tm_query_raw(L"w32tm /resync", out);
+}
