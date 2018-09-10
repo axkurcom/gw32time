@@ -33,6 +33,7 @@ static void print_help(void)
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
     wprintf(L"  gw32time servers list\n");
+    wprintf(L"  gw32time servers set <host...> --dry-run\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -339,6 +340,96 @@ static int list_servers(void)
     return 0;
 }
 
+static int is_option(const wchar_t *arg)
+{
+    return arg != NULL && arg[0] == L'-';
+}
+
+static int parse_server_args(int argc, wchar_t **argv, ntp_peer_list_t *out)
+{
+    int i;
+
+    if (out == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    ZeroMemory(out, sizeof(*out));
+    for (i = 3; i < argc; i++) {
+        ntp_peer_t *peer;
+
+        if (is_option(argv[i])) {
+            continue;
+        }
+
+        if (argv[i][0] == L'\0' || wcschr(argv[i], L' ') != NULL || wcschr(argv[i], L'\t') != NULL) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return -1;
+        }
+
+        if (out->count >= NTP_MAX_PEERS) {
+            SetLastError(ERROR_BUFFER_OVERFLOW);
+            return -1;
+        }
+
+        peer = &out->peers[out->count];
+        wcsncpy(peer->host, argv[i], (sizeof(peer->host) / sizeof(peer->host[0])) - 1);
+        peer->host[(sizeof(peer->host) / sizeof(peer->host[0])) - 1] = L'\0';
+        peer->flags = 0x8;
+        peer->enabled = 1;
+        out->count++;
+    }
+
+    if (out->count == 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int print_servers_set_dry_run(int argc, wchar_t **argv)
+{
+    w32time_config_t config;
+    ntp_peer_list_t desired;
+    wchar_t formatted[1024];
+
+    if (!has_arg(argc, argv, L"--dry-run")) {
+        fwprintf(stderr, L"Refusing to change NTP servers without --dry-run in this version.\n");
+        fwprintf(stderr, L"Usage: gw32time servers set <host...> --dry-run\n");
+        return 2;
+    }
+
+    if (parse_server_args(argc, argv, &desired) != 0) {
+        error_print_last(L"Parse server arguments");
+        fwprintf(stderr, L"Usage: gw32time servers set <host...> --dry-run\n");
+        return 2;
+    }
+
+    if (ntp_format_peer_list(&desired, formatted, sizeof(formatted) / sizeof(formatted[0])) != 0) {
+        error_print_last(L"Format NTP peer list");
+        return 1;
+    }
+
+    if (w32time_read_config(&config) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    wprintf(L"Planned changes:\n\n");
+    wprintf(L"NTP servers:\n");
+    wprintf(L"  current: %ls\n", config.ntp_server[0] ? config.ntp_server : L"(none)");
+    wprintf(L"  new:     %ls\n\n", formatted);
+    wprintf(L"Sync mode:\n");
+    wprintf(L"  current: %ls\n", config.type[0] ? config.type : L"unknown");
+    wprintf(L"  new:     NTP/manual\n\n");
+    wprintf(L"Actions:\n");
+    wprintf(L"  - write NtpServer\n");
+    wprintf(L"  - run w32tm /config /manualpeerlist:\"%ls\" /syncfromflags:manual /update\n", formatted);
+    wprintf(L"  - restart w32time\n");
+    wprintf(L"  - run w32tm /resync\n");
+    return 0;
+}
 
 int cli_dispatch(int argc, wchar_t **argv)
 {
@@ -391,7 +482,12 @@ int cli_dispatch(int argc, wchar_t **argv)
             return list_servers();
         }
 
+        if (argc >= 3 && arg_is(argv[2], L"set")) {
+            return print_servers_set_dry_run(argc, argv);
+        }
+
         fwprintf(stderr, L"Usage: gw32time servers list\n");
+        fwprintf(stderr, L"       gw32time servers set <host...> --dry-run\n");
         return 2;
     }
 
