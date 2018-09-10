@@ -32,6 +32,7 @@ static void print_help(void)
     wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
+    wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -282,6 +283,63 @@ static int run_sync_now(int argc, wchar_t **argv)
     return 0;
 }
 
+static const wchar_t *peer_flags_description(DWORD flags)
+{
+    switch (flags) {
+    case 0x1:
+        return L"special poll interval";
+    case 0x8:
+        return L"client";
+    case 0x9:
+        return L"client, special poll interval";
+    default:
+        return L"custom Windows Time flags";
+    }
+}
+
+static int list_servers(void)
+{
+    w32time_config_t config;
+    ntp_peer_list_t peers;
+    int i;
+
+    if (w32time_read_config(&config) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    wprintf(L"NTP servers:\n");
+    wprintf(L"  Raw: %ls\n", config.ntp_server[0] ? config.ntp_server : L"(none)");
+
+    if (config.ntp_server[0] == L'\0') {
+        return 0;
+    }
+
+    if (ntp_parse_peer_list(config.ntp_server, &peers) != 0) {
+        error_print_last(L"Parse NTP server list");
+        return 1;
+    }
+
+    if (peers.count == 0) {
+        wprintf(L"  (none)\n");
+        return 0;
+    }
+
+    for (i = 0; i < peers.count; i++) {
+        wprintf(
+            L"  %d. %ls\n",
+            i + 1,
+            peers.peers[i].host);
+        wprintf(
+            L"     Flags: 0x%lx (%ls)\n",
+            (unsigned long)peers.peers[i].flags,
+            peer_flags_description(peers.peers[i].flags));
+    }
+
+    return 0;
+}
+
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -325,6 +383,15 @@ int cli_dispatch(int argc, wchar_t **argv)
         }
 
         fwprintf(stderr, L"Usage: gw32time service status\n");
+        return 2;
+    }
+
+    if (arg_is(argv[1], L"servers")) {
+        if (argc >= 3 && arg_is(argv[2], L"list")) {
+            return list_servers();
+        }
+
+        fwprintf(stderr, L"Usage: gw32time servers list\n");
         return 2;
     }
 
