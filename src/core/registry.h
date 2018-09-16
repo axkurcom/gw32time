@@ -6,5 +6,7 @@
 
 int reg_read_dword(HKEY root, const wchar_t *path, const wchar_t *name, DWORD *out);
 int reg_read_string(HKEY root, const wchar_t *path, const wchar_t *name, wchar_t *buf, size_t chars);
+int reg_write_dword(HKEY root, const wchar_t *path, const wchar_t *name, DWORD value);
+int reg_write_string(HKEY root, const wchar_t *path, const wchar_t *name, const wchar_t *value);
 
 #endif

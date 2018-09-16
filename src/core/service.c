@@ -190,6 +190,49 @@ int svc_start(const wchar_t *name)
     return 0;
 }
 
+int svc_stop(const wchar_t *name)
+{
+    SC_HANDLE scm;
+    SC_HANDLE service;
+    SERVICE_STATUS status;
+    DWORD last_error;
+
+    if (name == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    service = open_service_handle(name, SC_MANAGER_CONNECT, SERVICE_STOP | SERVICE_QUERY_STATUS, &scm);
+    if (service == NULL) {
+        return -1;
+    }
+
+    if (!ControlService(service, SERVICE_CONTROL_STOP, &status)) {
+        last_error = GetLastError();
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        if (last_error == ERROR_SERVICE_NOT_ACTIVE) {
+            return 0;
+        }
+        SetLastError(last_error);
+        return -1;
+    }
+
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return 0;
+}
+
+int svc_restart(const wchar_t *name)
+{
+    if (svc_stop(name) != 0) {
+        return -1;
+    }
+
+    Sleep(1200);
+    return svc_start(name);
+}
+
 const wchar_t *svc_state_name(svc_state_t state)
 {
     switch (state) {

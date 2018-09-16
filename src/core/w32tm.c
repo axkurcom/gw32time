@@ -231,3 +231,26 @@ int w32tm_resync_raw(w32tm_raw_result_t *out)
 {
     return w32tm_query_raw(L"w32tm /resync", out);
 }
+
+int w32tm_config_manual_peers_raw(const wchar_t *peerlist, w32tm_raw_result_t *out)
+{
+    wchar_t cmdline[1400];
+
+    if (peerlist == NULL || peerlist[0] == L'\0' || out == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    if (wcschr(peerlist, L'"') != NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    _snwprintf(
+        cmdline,
+        sizeof(cmdline) / sizeof(cmdline[0]),
+        L"w32tm /config /manualpeerlist:\"%ls\" /syncfromflags:manual /update",
+        peerlist);
+    cmdline[(sizeof(cmdline) / sizeof(cmdline[0])) - 1] = L'\0';
+    return w32tm_query_raw(cmdline, out);
+}

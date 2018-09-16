@@ -1,5 +1,7 @@
 #include "registry.h"
 
+#include <wchar.h>
+
 int reg_read_dword(HKEY root, const wchar_t *path, const wchar_t *name, DWORD *out)
 {
     HKEY key;
@@ -75,5 +77,59 @@ int reg_read_string(HKEY root, const wchar_t *path, const wchar_t *name, wchar_t
     }
 
     buf[chars - 1] = L'\0';
+    return 0;
+}
+
+int reg_write_dword(HKEY root, const wchar_t *path, const wchar_t *name, DWORD value)
+{
+    HKEY key;
+    LONG rc;
+
+    if (path == NULL || name == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    rc = RegOpenKeyExW(root, path, 0, KEY_SET_VALUE, &key);
+    if (rc != ERROR_SUCCESS) {
+        SetLastError((DWORD)rc);
+        return -1;
+    }
+
+    rc = RegSetValueExW(key, name, 0, REG_DWORD, (const BYTE *)&value, sizeof(value));
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS) {
+        SetLastError((DWORD)rc);
+        return -1;
+    }
+
+    return 0;
+}
+
+int reg_write_string(HKEY root, const wchar_t *path, const wchar_t *name, const wchar_t *value)
+{
+    HKEY key;
+    DWORD size;
+    LONG rc;
+
+    if (path == NULL || name == NULL || value == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    size = (DWORD)((wcslen(value) + 1) * sizeof(wchar_t));
+    rc = RegOpenKeyExW(root, path, 0, KEY_SET_VALUE, &key);
+    if (rc != ERROR_SUCCESS) {
+        SetLastError((DWORD)rc);
+        return -1;
+    }
+
+    rc = RegSetValueExW(key, name, 0, REG_SZ, (const BYTE *)value, size);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS) {
+        SetLastError((DWORD)rc);
+        return -1;
+    }
+
     return 0;
 }

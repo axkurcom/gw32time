@@ -93,6 +93,20 @@ int w32time_read_config(w32time_config_t *cfg)
     return 0;
 }
 
+int w32time_write_manual_servers(const wchar_t *peerlist)
+{
+    if (peerlist == NULL || peerlist[0] == L'\0') {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    if (reg_write_string(HKEY_LOCAL_MACHINE, W32TIME_PARAMETERS, L"NtpServer", peerlist) != 0) {
+        return -1;
+    }
+
+    return reg_write_string(HKEY_LOCAL_MACHINE, W32TIME_PARAMETERS, L"Type", L"NTP");
+}
+
 int ntp_parse_peer_list(const wchar_t *raw, ntp_peer_list_t *out)
 {
     const wchar_t *p;

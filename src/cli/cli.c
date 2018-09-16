@@ -33,7 +33,7 @@ static void print_help(void)
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
     wprintf(L"  gw32time servers list\n");
-    wprintf(L"  gw32time servers set <host...> --dry-run\n");
+    wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -393,16 +393,15 @@ static int print_servers_set_dry_run(int argc, wchar_t **argv)
     w32time_config_t config;
     ntp_peer_list_t desired;
     wchar_t formatted[1024];
-
-    if (!has_arg(argc, argv, L"--dry-run")) {
-        fwprintf(stderr, L"Refusing to change NTP servers without --dry-run in this version.\n");
-        fwprintf(stderr, L"Usage: gw32time servers set <host...> --dry-run\n");
-        return 2;
-    }
+    int dry_run = has_arg(argc, argv, L"--dry-run");
+    int assume_yes = has_arg(argc, argv, L"--yes");
+    int no_sync = has_arg(argc, argv, L"--no-sync");
+    int is_admin = 0;
+    w32tm_raw_result_t result;
 
     if (parse_server_args(argc, argv, &desired) != 0) {
         error_print_last(L"Parse server arguments");
-        fwprintf(stderr, L"Usage: gw32time servers set <host...> --dry-run\n");
+        fwprintf(stderr, L"Usage: gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
         return 2;
     }
 
@@ -427,7 +426,61 @@ static int print_servers_set_dry_run(int argc, wchar_t **argv)
     wprintf(L"  - write NtpServer\n");
     wprintf(L"  - run w32tm /config /manualpeerlist:\"%ls\" /syncfromflags:manual /update\n", formatted);
     wprintf(L"  - restart w32time\n");
-    wprintf(L"  - run w32tm /resync\n");
+    if (!no_sync) {
+        wprintf(L"  - run w32tm /resync\n");
+    }
+
+    if (dry_run) {
+        return 0;
+    }
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"\nChanging NTP servers requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (!confirm_action(L"\nApply these changes?", assume_yes)) {
+        wprintf(L"Apply cancelled.\n");
+        return 1;
+    }
+
+    if (w32time_write_manual_servers(formatted) != 0) {
+        error_print_last(L"Write W32Time server configuration");
+        return 1;
+    }
+
+    if (w32tm_config_manual_peers_raw(formatted, &result) != 0) {
+        error_print_last(L"w32tm /config");
+        return 1;
+    }
+    if (result.raw[0] != L'\0') {
+        wprintf(L"\n%ls\n", result.raw);
+    }
+    if (result.exit_code != 0) {
+        fwprintf(stderr, L"w32tm /config failed with exit code %lu.\n", (unsigned long)result.exit_code);
+        return 1;
+    }
+
+    if (svc_restart(L"w32time") != 0) {
+        error_print_last(L"Restart Windows Time service");
+        return 1;
+    }
+
+    if (!no_sync) {
+        if (w32tm_resync_raw(&result) != 0) {
+            error_print_last(L"w32tm /resync");
+            return 1;
+        }
+        if (result.raw[0] != L'\0') {
+            wprintf(L"%ls\n", result.raw);
+        }
+        if (result.exit_code != 0) {
+            fwprintf(stderr, L"Resync failed with exit code %lu.\n", (unsigned long)result.exit_code);
+            return 1;
+        }
+    }
+
+    wprintf(L"Servers updated.\n");
     return 0;
 }
 
@@ -487,7 +540,7 @@ int cli_dispatch(int argc, wchar_t **argv)
         }
 
         fwprintf(stderr, L"Usage: gw32time servers list\n");
-        fwprintf(stderr, L"       gw32time servers set <host...> --dry-run\n");
+        fwprintf(stderr, L"       gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
         return 2;
     }
 
