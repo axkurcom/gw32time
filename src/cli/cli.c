@@ -34,6 +34,7 @@ static void print_help(void)
     wprintf(L"  gw32time service status\n");
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
+    wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -484,6 +485,33 @@ static int print_servers_set_dry_run(int argc, wchar_t **argv)
     return 0;
 }
 
+static int poll_get(void)
+{
+    w32time_config_t config;
+
+    if (w32time_read_config(&config) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    wprintf(L"Polling interval:\n");
+    if (config.has_special_poll_interval) {
+        wprintf(L"  SpecialPollInterval: %lu sec\n", (unsigned long)config.special_poll_interval);
+    } else {
+        wprintf(L"  SpecialPollInterval: unknown\n");
+    }
+
+    if (config.has_min_poll_interval) {
+        wprintf(L"  MinPollInterval:     %lu\n", (unsigned long)config.min_poll_interval);
+    }
+
+    if (config.has_max_poll_interval) {
+        wprintf(L"  MaxPollInterval:     %lu\n", (unsigned long)config.max_poll_interval);
+    }
+
+    return 0;
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -541,6 +569,15 @@ int cli_dispatch(int argc, wchar_t **argv)
 
         fwprintf(stderr, L"Usage: gw32time servers list\n");
         fwprintf(stderr, L"       gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
+        return 2;
+    }
+
+    if (arg_is(argv[1], L"poll")) {
+        if (argc >= 3 && arg_is(argv[2], L"get")) {
+            return poll_get();
+        }
+
+        fwprintf(stderr, L"Usage: gw32time poll get\n");
         return 2;
     }
 
