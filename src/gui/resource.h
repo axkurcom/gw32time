@@ -1,0 +1,14 @@
+#ifndef GW32TIME_GUI_RESOURCE_H
+#define GW32TIME_GUI_RESOURCE_H
+
+#define IDD_MAIN 100
+#define IDC_HEALTH 1001
+#define IDC_SERVICE 1002
+#define IDC_START 1003
+#define IDC_TYPE 1004
+#define IDC_SERVERS 1005
+#define IDC_POLL 1006
+#define IDC_REFRESH 1101
+#define IDC_EXIT 1102
+
+#endif

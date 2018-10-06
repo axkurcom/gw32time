@@ -9,6 +9,7 @@
 #include "../core/service.h"
 #include "../core/w32time.h"
 #include "../core/w32tm.h"
+#include "../gui/gui.h"
 
 #define GW32TIME_VERSION L"0.0.1"
 
@@ -29,6 +30,7 @@ static void print_help(void)
     wprintf(L"  gw32time --help\n");
     wprintf(L"  gw32time --version\n");
     wprintf(L"  gw32time status [--raw]\n");
+    wprintf(L"  gw32time gui\n");
     wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
@@ -535,6 +537,10 @@ int cli_dispatch(int argc, wchar_t **argv)
 
     if (arg_is(argv[1], L"status")) {
         return print_status(argc >= 3 && arg_is(argv[2], L"--raw"));
+    }
+
+    if (arg_is(argv[1], L"gui")) {
+        return gui_launch(GetModuleHandleW(NULL));
     }
 
     if (arg_is(argv[1], L"diag")) {

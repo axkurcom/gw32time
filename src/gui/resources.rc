@@ -1,0 +1,24 @@
+#include <windows.h>
+#include "resource.h"
+
+IDD_MAIN DIALOGEX 0, 0, 278, 176
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "GW32TIME"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Graphical UI for Windows Time Service", -1, 10, 10, 180, 10
+    LTEXT "Health:", -1, 10, 30, 52, 10
+    LTEXT "", IDC_HEALTH, 70, 30, 190, 10
+    LTEXT "Service:", -1, 10, 46, 52, 10
+    LTEXT "", IDC_SERVICE, 70, 46, 190, 10
+    LTEXT "Start:", -1, 10, 62, 52, 10
+    LTEXT "", IDC_START, 70, 62, 190, 10
+    LTEXT "Type:", -1, 10, 78, 52, 10
+    LTEXT "", IDC_TYPE, 70, 78, 190, 10
+    LTEXT "Servers:", -1, 10, 94, 52, 10
+    LTEXT "", IDC_SERVERS, 70, 94, 190, 24
+    LTEXT "Poll:", -1, 10, 124, 52, 10
+    LTEXT "", IDC_POLL, 70, 124, 190, 10
+    PUSHBUTTON "Refresh", IDC_REFRESH, 164, 150, 48, 14
+    PUSHBUTTON "Exit", IDC_EXIT, 220, 150, 48, 14
+END
