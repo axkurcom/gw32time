@@ -1,6 +1,7 @@
 #include "cli.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 #include "../core/diagnostics.h"
@@ -37,6 +38,7 @@ static void print_help(void)
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
     wprintf(L"  gw32time poll get\n");
+    wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -514,6 +516,124 @@ static int poll_get(void)
     return 0;
 }
 
+static int parse_dword_arg(const wchar_t *arg, DWORD *out)
+{
+    wchar_t *end;
+    unsigned long value;
+
+    if (arg == NULL || out == NULL || arg[0] == L'\0') {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    value = wcstoul(arg, &end, 10);
+    if (*end != L'\0' || value == 0 || value > 0xffffffffUL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    *out = (DWORD)value;
+    return 0;
+}
+
+static int validate_poll_interval(DWORD seconds, int force)
+{
+    if (seconds < 64 && !force) {
+        fwprintf(stderr, L"Polling intervals below 64 seconds require --force.\n");
+        return -1;
+    }
+
+    if (seconds < 256) {
+        fwprintf(stderr, L"Warning: polling interval is aggressive.\n");
+    } else if (seconds > 86400) {
+        fwprintf(stderr, L"Warning: polling interval is longer than one day.\n");
+    }
+
+    return 0;
+}
+
+static int poll_set(int argc, wchar_t **argv)
+{
+    DWORD seconds;
+    w32time_config_t config;
+    int dry_run = has_arg(argc, argv, L"--dry-run");
+    int assume_yes = has_arg(argc, argv, L"--yes");
+    int force = has_arg(argc, argv, L"--force");
+    int is_admin = 0;
+    w32tm_raw_result_t result;
+
+    if (argc < 4 || is_option(argv[3])) {
+        fwprintf(stderr, L"Usage: gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
+        return 2;
+    }
+
+    if (parse_dword_arg(argv[3], &seconds) != 0) {
+        error_print_last(L"Parse polling interval");
+        return 2;
+    }
+
+    if (validate_poll_interval(seconds, force) != 0) {
+        return 2;
+    }
+
+    if (w32time_read_config(&config) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    wprintf(L"Planned changes:\n\n");
+    wprintf(L"Polling interval:\n");
+    if (config.has_special_poll_interval) {
+        wprintf(L"  current: %lu sec\n", (unsigned long)config.special_poll_interval);
+    } else {
+        wprintf(L"  current: unknown\n");
+    }
+    wprintf(L"  new:     %lu sec\n\n", (unsigned long)seconds);
+    wprintf(L"Actions:\n");
+    wprintf(L"  - write SpecialPollInterval\n");
+    wprintf(L"  - run w32tm /config /update\n");
+    wprintf(L"  - restart w32time\n");
+
+    if (dry_run) {
+        return 0;
+    }
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"\nChanging polling interval requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (!confirm_action(L"\nApply these changes?", assume_yes)) {
+        wprintf(L"Apply cancelled.\n");
+        return 1;
+    }
+
+    if (w32time_write_poll_interval(seconds) != 0) {
+        error_print_last(L"Write SpecialPollInterval");
+        return 1;
+    }
+
+    if (w32tm_config_update_raw(&result) != 0) {
+        error_print_last(L"w32tm /config /update");
+        return 1;
+    }
+    if (result.raw[0] != L'\0') {
+        wprintf(L"\n%ls\n", result.raw);
+    }
+    if (result.exit_code != 0) {
+        fwprintf(stderr, L"w32tm /config /update failed with exit code %lu.\n", (unsigned long)result.exit_code);
+        return 1;
+    }
+
+    if (svc_restart(L"w32time") != 0) {
+        error_print_last(L"Restart Windows Time service");
+        return 1;
+    }
+
+    wprintf(L"Polling interval updated.\n");
+    return 0;
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -583,7 +703,12 @@ int cli_dispatch(int argc, wchar_t **argv)
             return poll_get();
         }
 
+        if (argc >= 3 && arg_is(argv[2], L"set")) {
+            return poll_set(argc, argv);
+        }
+
         fwprintf(stderr, L"Usage: gw32time poll get\n");
+        fwprintf(stderr, L"       gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
         return 2;
     }
 

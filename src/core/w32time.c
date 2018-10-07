@@ -107,6 +107,16 @@ int w32time_write_manual_servers(const wchar_t *peerlist)
     return reg_write_string(HKEY_LOCAL_MACHINE, W32TIME_PARAMETERS, L"Type", L"NTP");
 }
 
+int w32time_write_poll_interval(DWORD seconds)
+{
+    if (seconds == 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    return reg_write_dword(HKEY_LOCAL_MACHINE, W32TIME_NTP_CLIENT, L"SpecialPollInterval", seconds);
+}
+
 int ntp_parse_peer_list(const wchar_t *raw, ntp_peer_list_t *out)
 {
     const wchar_t *p;

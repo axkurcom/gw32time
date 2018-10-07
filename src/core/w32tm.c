@@ -254,3 +254,8 @@ int w32tm_config_manual_peers_raw(const wchar_t *peerlist, w32tm_raw_result_t *o
     cmdline[(sizeof(cmdline) / sizeof(cmdline[0])) - 1] = L'\0';
     return w32tm_query_raw(cmdline, out);
 }
+
+int w32tm_config_update_raw(w32tm_raw_result_t *out)
+{
+    return w32tm_query_raw(L"w32tm /config /update", out);
+}

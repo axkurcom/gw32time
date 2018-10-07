@@ -15,5 +15,6 @@ int w32tm_query_peers_raw(w32tm_raw_result_t *out);
 int w32tm_query_configuration_raw(w32tm_raw_result_t *out);
 int w32tm_resync_raw(w32tm_raw_result_t *out);
 int w32tm_config_manual_peers_raw(const wchar_t *peerlist, w32tm_raw_result_t *out);
+int w32tm_config_update_raw(w32tm_raw_result_t *out);
 
 #endif
