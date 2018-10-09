@@ -5,8 +5,10 @@
 
 #include "resource.h"
 #include "../core/diagnostics.h"
+#include "../core/privilege.h"
 #include "../core/service.h"
 #include "../core/w32time.h"
+#include "../core/w32tm.h"
 
 static HINSTANCE g_instance;
 
@@ -59,6 +61,35 @@ static void refresh_status(HWND dialog)
     }
 }
 
+static void sync_now(HWND dialog)
+{
+    int is_admin = 0;
+    svc_state_t service_state = SVC_STATE_UNKNOWN;
+    w32tm_raw_result_t result;
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        MessageBoxW(dialog, L"Sync requires an elevated administrator token.", L"GW32TIME", MB_ICONWARNING);
+        return;
+    }
+
+    if (svc_query_state(L"w32time", &service_state) == 0 && service_state != SVC_STATE_RUNNING) {
+        if (svc_start(L"w32time") != 0) {
+            MessageBoxW(dialog, L"Could not start Windows Time service.", L"GW32TIME", MB_ICONERROR);
+            return;
+        }
+        Sleep(1200);
+    }
+
+    if (w32tm_resync_raw(&result) != 0 || result.exit_code != 0) {
+        MessageBoxW(dialog, L"Windows Time resync failed.", L"GW32TIME", MB_ICONERROR);
+        refresh_status(dialog);
+        return;
+    }
+
+    MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
+    refresh_status(dialog);
+}
+
 static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
 {
     (void)lparam;
@@ -72,6 +103,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         switch (LOWORD(wparam)) {
         case IDC_REFRESH:
             refresh_status(dialog);
+            return TRUE;
+        case IDC_SYNC:
+            sync_now(dialog);
             return TRUE;
         case IDC_EXIT:
         case IDCANCEL:

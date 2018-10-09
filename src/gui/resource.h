@@ -9,6 +9,7 @@
 #define IDC_SERVERS 1005
 #define IDC_POLL 1006
 #define IDC_REFRESH 1101
-#define IDC_EXIT 1102
+#define IDC_SYNC 1102
+#define IDC_EXIT 1103
 
 #endif
