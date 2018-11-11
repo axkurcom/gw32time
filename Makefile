@@ -7,6 +7,7 @@ SRC := \
 	src/main.c \
 	src/cli/cli.c \
 	src/gui/gui.c \
+	src/core/config_file.c \
 	src/core/diagnostics.c \
 	src/core/error.c \
 	src/core/privilege.c \

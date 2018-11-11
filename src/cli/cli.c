@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+#include "../core/config_file.h"
 #include "../core/diagnostics.h"
 #include "../core/error.h"
 #include "../core/privilege.h"
@@ -39,6 +40,7 @@ static void print_help(void)
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
+    wprintf(L"  gw32time backup <file>\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -634,6 +636,29 @@ static int poll_set(int argc, wchar_t **argv)
     return 0;
 }
 
+static int backup_config(const wchar_t *path)
+{
+    w32time_config_t config;
+
+    if (path == NULL || path[0] == L'\0') {
+        fwprintf(stderr, L"Usage: gw32time backup <file>\n");
+        return 2;
+    }
+
+    if (w32time_read_config(&config) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    if (config_file_write(path, &config) != 0) {
+        error_print_last(L"Write backup file");
+        return 1;
+    }
+
+    wprintf(L"Backup written: %ls\n", path);
+    return 0;
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -709,6 +734,15 @@ int cli_dispatch(int argc, wchar_t **argv)
 
         fwprintf(stderr, L"Usage: gw32time poll get\n");
         fwprintf(stderr, L"       gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
+        return 2;
+    }
+
+    if (arg_is(argv[1], L"backup")) {
+        if (argc >= 3) {
+            return backup_config(argv[2]);
+        }
+
+        fwprintf(stderr, L"Usage: gw32time backup <file>\n");
         return 2;
     }
 
