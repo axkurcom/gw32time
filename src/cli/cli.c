@@ -41,6 +41,7 @@ static void print_help(void)
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
     wprintf(L"  gw32time backup <file>\n");
+    wprintf(L"  gw32time restore <file> --dry-run\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -659,6 +660,51 @@ static int backup_config(const wchar_t *path)
     return 0;
 }
 
+static int restore_config_dry_run(int argc, wchar_t **argv)
+{
+    w32time_config_t current;
+    w32time_config_t desired;
+
+    if (argc < 3 || argv[2][0] == L'\0' || !has_arg(argc, argv, L"--dry-run")) {
+        fwprintf(stderr, L"Usage: gw32time restore <file> --dry-run\n");
+        return 2;
+    }
+
+    if (config_file_read(argv[2], &desired) != 0) {
+        error_print_last(L"Read backup file");
+        return 1;
+    }
+
+    if (w32time_read_config(&current) != 0) {
+        error_print_last(L"Read W32Time configuration");
+        return 1;
+    }
+
+    wprintf(L"Planned restore:\n\n");
+    wprintf(L"Type:\n");
+    wprintf(L"  current: %ls\n", current.type[0] ? current.type : L"unknown");
+    wprintf(L"  new:     %ls\n\n", desired.type[0] ? desired.type : L"unknown");
+    wprintf(L"NTP servers:\n");
+    wprintf(L"  current: %ls\n", current.ntp_server[0] ? current.ntp_server : L"(none)");
+    wprintf(L"  new:     %ls\n\n", desired.ntp_server[0] ? desired.ntp_server : L"(none)");
+    wprintf(L"SpecialPollInterval:\n");
+    if (current.has_special_poll_interval) {
+        wprintf(L"  current: %lu sec\n", (unsigned long)current.special_poll_interval);
+    } else {
+        wprintf(L"  current: unknown\n");
+    }
+    if (desired.has_special_poll_interval) {
+        wprintf(L"  new:     %lu sec\n", (unsigned long)desired.special_poll_interval);
+    } else {
+        wprintf(L"  new:     unchanged\n");
+    }
+    wprintf(L"\nActions:\n");
+    wprintf(L"  - restore registry values from backup\n");
+    wprintf(L"  - run w32tm /config /update\n");
+    wprintf(L"  - restart w32time\n");
+    return 0;
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
@@ -744,6 +790,10 @@ int cli_dispatch(int argc, wchar_t **argv)
 
         fwprintf(stderr, L"Usage: gw32time backup <file>\n");
         return 2;
+    }
+
+    if (arg_is(argv[1], L"restore")) {
+        return restore_config_dry_run(argc, argv);
     }
 
     fwprintf(stderr, L"Unknown command: %ls\n", argv[1]);
