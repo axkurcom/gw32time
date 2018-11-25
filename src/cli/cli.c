@@ -41,7 +41,7 @@ static void print_help(void)
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
     wprintf(L"  gw32time backup <file>\n");
-    wprintf(L"  gw32time restore <file> --dry-run\n");
+    wprintf(L"  gw32time restore <file> [--dry-run] [--yes]\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -660,13 +660,17 @@ static int backup_config(const wchar_t *path)
     return 0;
 }
 
-static int restore_config_dry_run(int argc, wchar_t **argv)
+static int restore_config(int argc, wchar_t **argv)
 {
     w32time_config_t current;
     w32time_config_t desired;
+    int dry_run = has_arg(argc, argv, L"--dry-run");
+    int assume_yes = has_arg(argc, argv, L"--yes");
+    int is_admin = 0;
+    w32tm_raw_result_t result;
 
-    if (argc < 3 || argv[2][0] == L'\0' || !has_arg(argc, argv, L"--dry-run")) {
-        fwprintf(stderr, L"Usage: gw32time restore <file> --dry-run\n");
+    if (argc < 3 || argv[2][0] == L'\0') {
+        fwprintf(stderr, L"Usage: gw32time restore <file> [--dry-run] [--yes]\n");
         return 2;
     }
 
@@ -702,6 +706,44 @@ static int restore_config_dry_run(int argc, wchar_t **argv)
     wprintf(L"  - restore registry values from backup\n");
     wprintf(L"  - run w32tm /config /update\n");
     wprintf(L"  - restart w32time\n");
+
+    if (dry_run) {
+        return 0;
+    }
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"\nRestoring configuration requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (!confirm_action(L"\nApply restore?", assume_yes)) {
+        wprintf(L"Restore cancelled.\n");
+        return 1;
+    }
+
+    if (w32time_write_config(&desired) != 0) {
+        error_print_last(L"Write restored W32Time configuration");
+        return 1;
+    }
+
+    if (w32tm_config_update_raw(&result) != 0) {
+        error_print_last(L"w32tm /config /update");
+        return 1;
+    }
+    if (result.raw[0] != L'\0') {
+        wprintf(L"\n%ls\n", result.raw);
+    }
+    if (result.exit_code != 0) {
+        fwprintf(stderr, L"w32tm /config /update failed with exit code %lu.\n", (unsigned long)result.exit_code);
+        return 1;
+    }
+
+    if (svc_restart(L"w32time") != 0) {
+        error_print_last(L"Restart Windows Time service");
+        return 1;
+    }
+
+    wprintf(L"Configuration restored.\n");
     return 0;
 }
 
@@ -793,7 +835,7 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"restore")) {
-        return restore_config_dry_run(argc, argv);
+        return restore_config(argc, argv);
     }
 
     fwprintf(stderr, L"Unknown command: %ls\n", argv[1]);

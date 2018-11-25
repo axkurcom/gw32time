@@ -31,6 +31,7 @@ typedef struct {
 } w32time_config_t;
 
 int w32time_read_config(w32time_config_t *cfg);
+int w32time_write_config(const w32time_config_t *cfg);
 int w32time_write_manual_servers(const wchar_t *peerlist);
 int w32time_write_poll_interval(DWORD seconds);
 int ntp_parse_peer_list(const wchar_t *raw, ntp_peer_list_t *out);

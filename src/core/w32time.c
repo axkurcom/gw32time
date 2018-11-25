@@ -93,6 +93,44 @@ int w32time_read_config(w32time_config_t *cfg)
     return 0;
 }
 
+int w32time_write_config(const w32time_config_t *cfg)
+{
+    if (cfg == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    if (cfg->type[0] != L'\0') {
+        if (reg_write_string(HKEY_LOCAL_MACHINE, W32TIME_PARAMETERS, L"Type", cfg->type) != 0) {
+            return -1;
+        }
+    }
+
+    if (cfg->ntp_server[0] != L'\0') {
+        if (reg_write_string(HKEY_LOCAL_MACHINE, W32TIME_PARAMETERS, L"NtpServer", cfg->ntp_server) != 0) {
+            return -1;
+        }
+    }
+
+    if (cfg->has_special_poll_interval) {
+        if (reg_write_dword(
+                HKEY_LOCAL_MACHINE,
+                W32TIME_NTP_CLIENT,
+                L"SpecialPollInterval",
+                cfg->special_poll_interval) != 0) {
+            return -1;
+        }
+    }
+
+    if (cfg->has_ntp_client_enabled) {
+        if (reg_write_dword(HKEY_LOCAL_MACHINE, W32TIME_NTP_CLIENT, L"Enabled", cfg->ntp_client_enabled) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 int w32time_write_manual_servers(const wchar_t *peerlist)
 {
     if (peerlist == NULL || peerlist[0] == L'\0') {
