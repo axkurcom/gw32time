@@ -10,6 +10,8 @@
 #define IDC_POLL 1006
 #define IDC_REFRESH 1101
 #define IDC_SYNC 1102
-#define IDC_EXIT 1103
+#define IDC_BACKUP 1103
+#define IDC_RESTORE 1104
+#define IDC_EXIT 1105
 
 #endif

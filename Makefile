@@ -17,7 +17,7 @@ SRC := \
 	src/core/w32tm.c
 
 CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -DUNICODE -D_UNICODE
-LDFLAGS := -municode -ladvapi32
+LDFLAGS := -municode -ladvapi32 -lcomdlg32
 
 .PHONY: all clean
 
