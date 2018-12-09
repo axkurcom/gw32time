@@ -7,6 +7,7 @@
 #include "../core/config_file.h"
 #include "../core/diagnostics.h"
 #include "../core/error.h"
+#include "../core/ntp_probe.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
 #include "../core/w32time.h"
@@ -37,6 +38,7 @@ static void print_help(void)
     wprintf(L"  gw32time diag\n");
     wprintf(L"  gw32time service status\n");
     wprintf(L"  gw32time servers list\n");
+    wprintf(L"  gw32time servers test <host>\n");
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
@@ -346,6 +348,38 @@ static int list_servers(void)
     }
 
     return 0;
+}
+
+static int test_server(const wchar_t *host)
+{
+    ntp_probe_result_t result;
+
+    if (host == NULL || host[0] == L'\0') {
+        fwprintf(stderr, L"Usage: gw32time servers test <host>\n");
+        return 2;
+    }
+
+    wprintf(L"Testing NTP server: %ls\n\n", host);
+    if (ntp_probe(host, 1500, &result) != 0) {
+        error_print_last(L"NTP probe");
+        return 1;
+    }
+
+    wprintf(L"DNS:      %ls\n", result.dns_ok ? L"OK" : L"Failed");
+    wprintf(L"UDP/123:  %ls\n", result.ok ? L"OK" : L"Failed");
+    if (result.ok) {
+        wprintf(L"RTT:      %lu ms\n", (unsigned long)result.rtt_ms);
+        wprintf(L"Offset:   %.0f ms\n", result.offset_ms);
+        wprintf(L"Stratum:  %d\n", result.stratum);
+        wprintf(L"Result:   OK\n");
+        return 0;
+    }
+
+    wprintf(L"Result:   Failed\n");
+    if (result.error[0] != L'\0') {
+        wprintf(L"Reason:   %ls\n", result.error);
+    }
+    return 1;
 }
 
 static int is_option(const wchar_t *arg)
@@ -802,11 +836,21 @@ int cli_dispatch(int argc, wchar_t **argv)
             return list_servers();
         }
 
+        if (argc >= 3 && arg_is(argv[2], L"test")) {
+            if (argc >= 4) {
+                return test_server(argv[3]);
+            }
+
+            fwprintf(stderr, L"Usage: gw32time servers test <host>\n");
+            return 2;
+        }
+
         if (argc >= 3 && arg_is(argv[2], L"set")) {
             return print_servers_set_dry_run(argc, argv);
         }
 
         fwprintf(stderr, L"Usage: gw32time servers list\n");
+        fwprintf(stderr, L"       gw32time servers test <host>\n");
         fwprintf(stderr, L"       gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
         return 2;
     }

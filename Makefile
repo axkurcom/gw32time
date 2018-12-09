@@ -10,6 +10,7 @@ SRC := \
 	src/core/config_file.c \
 	src/core/diagnostics.c \
 	src/core/error.c \
+	src/core/ntp_probe.c \
 	src/core/privilege.c \
 	src/core/registry.c \
 	src/core/service.c \
@@ -17,7 +18,7 @@ SRC := \
 	src/core/w32tm.c
 
 CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -DUNICODE -D_UNICODE
-LDFLAGS := -municode -ladvapi32 -lcomdlg32
+LDFLAGS := -municode -ladvapi32 -lcomdlg32 -lws2_32
 
 .PHONY: all clean
 
