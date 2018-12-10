@@ -7,6 +7,7 @@
 #include "resource.h"
 #include "../core/config_file.h"
 #include "../core/diagnostics.h"
+#include "../core/ntp_probe.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
 #include "../core/w32time.h"
@@ -166,6 +167,40 @@ static void restore_config(HWND dialog)
     refresh_status(dialog);
 }
 
+static void test_server(HWND dialog)
+{
+    wchar_t host[256];
+    wchar_t message[512];
+    ntp_probe_result_t result;
+
+    GetDlgItemTextW(dialog, IDC_TEST_HOST, host, sizeof(host) / sizeof(host[0]));
+    if (host[0] == L'\0') {
+        MessageBoxW(dialog, L"Enter an NTP host to test.", L"GW32TIME", MB_ICONWARNING);
+        return;
+    }
+
+    if (ntp_probe(host, 3000, &result) != 0 || !result.ok) {
+        _snwprintf(
+            message,
+            sizeof(message) / sizeof(message[0]),
+            L"NTP probe failed: %ls",
+            result.error[0] ? result.error : L"unknown error");
+        message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+        MessageBoxW(dialog, message, L"GW32TIME", MB_ICONERROR);
+        return;
+    }
+
+    _snwprintf(
+        message,
+        sizeof(message) / sizeof(message[0]),
+        L"NTP probe OK.\nRTT: %lu ms\nOffset: %.0f ms\nStratum: %d",
+        (unsigned long)result.rtt_ms,
+        result.offset_ms,
+        result.stratum);
+    message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+    MessageBoxW(dialog, message, L"GW32TIME", MB_ICONINFORMATION);
+}
+
 static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
 {
     (void)lparam;
@@ -188,6 +223,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             return TRUE;
         case IDC_RESTORE:
             restore_config(dialog);
+            return TRUE;
+        case IDC_TEST:
+            test_server(dialog);
             return TRUE;
         case IDC_EXIT:
         case IDCANCEL:

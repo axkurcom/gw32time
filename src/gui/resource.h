@@ -8,10 +8,12 @@
 #define IDC_TYPE 1004
 #define IDC_SERVERS 1005
 #define IDC_POLL 1006
+#define IDC_TEST_HOST 1007
 #define IDC_REFRESH 1101
 #define IDC_SYNC 1102
 #define IDC_BACKUP 1103
 #define IDC_RESTORE 1104
-#define IDC_EXIT 1105
+#define IDC_TEST 1105
+#define IDC_EXIT 1106
 
 #endif
