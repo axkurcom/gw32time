@@ -36,7 +36,7 @@ static void print_help(void)
     wprintf(L"  gw32time gui\n");
     wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag\n");
-    wprintf(L"  gw32time service status\n");
+    wprintf(L"  gw32time service status|start|restart\n");
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers test <host>\n");
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
@@ -80,6 +80,42 @@ static int print_service_status(void)
     wprintf(L"  State:      %ls\n", svc_state_name(state));
     wprintf(L"  Start type: %ls\n", svc_start_type_name(start_type));
     return 0;
+}
+
+static int service_start_command(void)
+{
+    int is_admin = 0;
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"Starting Windows Time service requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (svc_start(L"w32time") != 0) {
+        error_print_last(L"Start Windows Time service");
+        return 1;
+    }
+
+    wprintf(L"Windows Time service start requested.\n");
+    return print_service_status();
+}
+
+static int service_restart_command(void)
+{
+    int is_admin = 0;
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"Restarting Windows Time service requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (svc_restart(L"w32time") != 0) {
+        error_print_last(L"Restart Windows Time service");
+        return 1;
+    }
+
+    wprintf(L"Windows Time service restart requested.\n");
+    return print_service_status();
 }
 
 static void print_admin_block(void)
@@ -827,7 +863,15 @@ int cli_dispatch(int argc, wchar_t **argv)
             return print_service_status();
         }
 
-        fwprintf(stderr, L"Usage: gw32time service status\n");
+        if (argc >= 3 && arg_is(argv[2], L"start")) {
+            return service_start_command();
+        }
+
+        if (argc >= 3 && arg_is(argv[2], L"restart")) {
+            return service_restart_command();
+        }
+
+        fwprintf(stderr, L"Usage: gw32time service status|start|restart\n");
         return 2;
     }
 
