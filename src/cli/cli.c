@@ -42,6 +42,7 @@ static void print_help(void)
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
+    wprintf(L"  gw32time preset desktop|windows-default|domain --dry-run\n");
     wprintf(L"  gw32time backup <file>\n");
     wprintf(L"  gw32time restore <file> [--dry-run] [--yes]\n");
     wprintf(L"  gw32time sync [--yes]\n");
@@ -707,6 +708,49 @@ static int poll_set(int argc, wchar_t **argv)
     return 0;
 }
 
+static int preset_dry_run(int argc, wchar_t **argv)
+{
+    const wchar_t *name;
+    const wchar_t *servers = NULL;
+    const wchar_t *mode = L"NTP/manual";
+    DWORD poll = 1024;
+
+    if (argc < 3 || !has_arg(argc, argv, L"--dry-run")) {
+        fwprintf(stderr, L"Usage: gw32time preset desktop|windows-default|domain --dry-run\n");
+        return 2;
+    }
+
+    name = argv[2];
+    if (arg_is(name, L"desktop")) {
+        servers = L"time.cloudflare.com,0x8 pool.ntp.org,0x8 time.google.com,0x8";
+        poll = 1024;
+    } else if (arg_is(name, L"windows-default")) {
+        servers = L"time.windows.com,0x8";
+        poll = 604800;
+    } else if (arg_is(name, L"domain")) {
+        servers = L"(unchanged)";
+        mode = L"NT5DS";
+        poll = 0;
+    } else {
+        fwprintf(stderr, L"Unknown preset: %ls\n", name);
+        return 2;
+    }
+
+    wprintf(L"Preset plan: %ls\n\n", name);
+    wprintf(L"Sync mode: %ls\n", mode);
+    wprintf(L"Servers:   %ls\n", servers);
+    if (poll != 0) {
+        wprintf(L"Poll:      %lu sec\n", (unsigned long)poll);
+    } else {
+        wprintf(L"Poll:      unchanged\n");
+    }
+    wprintf(L"\nActions:\n");
+    wprintf(L"  - update W32Time registry values\n");
+    wprintf(L"  - run w32tm /config /update\n");
+    wprintf(L"  - restart w32time\n");
+    return 0;
+}
+
 static int backup_config(const wchar_t *path)
 {
     w32time_config_t config;
@@ -911,6 +955,10 @@ int cli_dispatch(int argc, wchar_t **argv)
         fwprintf(stderr, L"Usage: gw32time poll get\n");
         fwprintf(stderr, L"       gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
         return 2;
+    }
+
+    if (arg_is(argv[1], L"preset")) {
+        return preset_dry_run(argc, argv);
     }
 
     if (arg_is(argv[1], L"backup")) {
