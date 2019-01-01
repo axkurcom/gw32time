@@ -42,7 +42,7 @@ static void print_help(void)
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
-    wprintf(L"  gw32time preset desktop|windows-default|domain --dry-run\n");
+    wprintf(L"  gw32time preset desktop|windows-default|domain [--dry-run] [--yes]\n");
     wprintf(L"  gw32time backup <file>\n");
     wprintf(L"  gw32time restore <file> [--dry-run] [--yes]\n");
     wprintf(L"  gw32time sync [--yes]\n");
@@ -714,23 +714,38 @@ static int preset_dry_run(int argc, wchar_t **argv)
     const wchar_t *servers = NULL;
     const wchar_t *mode = L"NTP/manual";
     DWORD poll = 1024;
+    int dry_run = has_arg(argc, argv, L"--dry-run");
+    int assume_yes = has_arg(argc, argv, L"--yes");
+    int is_admin = 0;
+    w32time_config_t desired;
+    w32tm_raw_result_t result;
 
-    if (argc < 3 || !has_arg(argc, argv, L"--dry-run")) {
-        fwprintf(stderr, L"Usage: gw32time preset desktop|windows-default|domain --dry-run\n");
+    if (argc < 3) {
+        fwprintf(stderr, L"Usage: gw32time preset desktop|windows-default|domain [--dry-run] [--yes]\n");
         return 2;
     }
 
+    ZeroMemory(&desired, sizeof(desired));
     name = argv[2];
     if (arg_is(name, L"desktop")) {
         servers = L"time.cloudflare.com,0x8 pool.ntp.org,0x8 time.google.com,0x8";
         poll = 1024;
+        wcscpy(desired.type, L"NTP");
+        wcscpy(desired.ntp_server, servers);
+        desired.special_poll_interval = poll;
+        desired.has_special_poll_interval = 1;
     } else if (arg_is(name, L"windows-default")) {
         servers = L"time.windows.com,0x8";
         poll = 604800;
+        wcscpy(desired.type, L"NTP");
+        wcscpy(desired.ntp_server, servers);
+        desired.special_poll_interval = poll;
+        desired.has_special_poll_interval = 1;
     } else if (arg_is(name, L"domain")) {
         servers = L"(unchanged)";
         mode = L"NT5DS";
         poll = 0;
+        wcscpy(desired.type, L"NT5DS");
     } else {
         fwprintf(stderr, L"Unknown preset: %ls\n", name);
         return 2;
@@ -748,6 +763,44 @@ static int preset_dry_run(int argc, wchar_t **argv)
     wprintf(L"  - update W32Time registry values\n");
     wprintf(L"  - run w32tm /config /update\n");
     wprintf(L"  - restart w32time\n");
+
+    if (dry_run) {
+        return 0;
+    }
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        fwprintf(stderr, L"\nApplying presets requires an elevated administrator token.\n");
+        return 1;
+    }
+
+    if (!confirm_action(L"\nApply preset?", assume_yes)) {
+        wprintf(L"Preset cancelled.\n");
+        return 1;
+    }
+
+    if (w32time_write_config(&desired) != 0) {
+        error_print_last(L"Write preset configuration");
+        return 1;
+    }
+
+    if (w32tm_config_update_raw(&result) != 0) {
+        error_print_last(L"w32tm /config /update");
+        return 1;
+    }
+    if (result.raw[0] != L'\0') {
+        wprintf(L"\n%ls\n", result.raw);
+    }
+    if (result.exit_code != 0) {
+        fwprintf(stderr, L"w32tm /config /update failed with exit code %lu.\n", (unsigned long)result.exit_code);
+        return 1;
+    }
+
+    if (svc_restart(L"w32time") != 0) {
+        error_print_last(L"Restart Windows Time service");
+        return 1;
+    }
+
+    wprintf(L"Preset applied.\n");
     return 0;
 }
 
