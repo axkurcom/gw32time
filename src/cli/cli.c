@@ -172,6 +172,23 @@ static void print_w32tm_block(const wchar_t *title, int (*query)(w32tm_raw_resul
     }
 }
 
+static void print_peer_summary(const wchar_t *raw)
+{
+    ntp_peer_list_t peers;
+
+    if (raw == NULL || raw[0] == L'\0') {
+        wprintf(L"Peers:    0\n");
+        return;
+    }
+
+    if (ntp_parse_peer_list(raw, &peers) != 0) {
+        wprintf(L"Peers:    unparsed\n");
+        return;
+    }
+
+    wprintf(L"Peers:    %d\n", peers.count);
+}
+
 static int print_status(int raw)
 {
     svc_state_t state = SVC_STATE_UNKNOWN;
@@ -197,6 +214,7 @@ static int print_status(int raw)
     wprintf(L"Start:    %ls\n", svc_start_type_name(start_type));
     wprintf(L"Type:     %ls\n", config.type[0] ? config.type : L"unknown");
     print_server_summary(config.ntp_server);
+    print_peer_summary(config.ntp_server);
     if (config.has_special_poll_interval) {
         wprintf(L"Poll:     %lu sec\n", (unsigned long)config.special_poll_interval);
     } else {
