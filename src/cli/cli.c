@@ -10,6 +10,7 @@
 #include "../core/ntp_probe.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
+#include "../core/winver.h"
 #include "../core/w32time.h"
 #include "../core/w32tm.h"
 #include "../gui/gui.h"
@@ -233,9 +234,19 @@ static int print_diag(void)
 {
     int rc;
     health_t health;
+    os_info_t os;
 
     wprintf(L"Windows Time Diagnostics\n");
     wprintf(L"========================\n\n");
+
+    if (winver_query(&os) == 0) {
+        wprintf(L"OS:\n");
+        wprintf(L"  Version: %lu.%lu build %lu\n",
+            (unsigned long)os.major,
+            (unsigned long)os.minor,
+            (unsigned long)os.build);
+        wprintf(L"  Arch:    %ls\n\n", os_arch_name(os.arch));
+    }
 
     rc = print_status(0);
     if (rc != 0) {
