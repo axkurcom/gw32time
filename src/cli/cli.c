@@ -8,6 +8,7 @@
 #include "../core/diagnostics.h"
 #include "../core/error.h"
 #include "../core/ntp_probe.h"
+#include "../core/preset.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
 #include "../core/winver.h"
@@ -740,13 +741,10 @@ static int poll_set(int argc, wchar_t **argv)
 static int preset_dry_run(int argc, wchar_t **argv)
 {
     const wchar_t *name;
-    const wchar_t *servers = NULL;
-    const wchar_t *mode = L"NTP/manual";
-    DWORD poll = 1024;
+    preset_t preset;
     int dry_run = has_arg(argc, argv, L"--dry-run");
     int assume_yes = has_arg(argc, argv, L"--yes");
     int is_admin = 0;
-    w32time_config_t desired;
     w32tm_raw_result_t result;
 
     if (argc < 3) {
@@ -754,37 +752,17 @@ static int preset_dry_run(int argc, wchar_t **argv)
         return 2;
     }
 
-    ZeroMemory(&desired, sizeof(desired));
     name = argv[2];
-    if (arg_is(name, L"desktop")) {
-        servers = L"time.cloudflare.com,0x8 pool.ntp.org,0x8 time.google.com,0x8";
-        poll = 1024;
-        wcscpy(desired.type, L"NTP");
-        wcscpy(desired.ntp_server, servers);
-        desired.special_poll_interval = poll;
-        desired.has_special_poll_interval = 1;
-    } else if (arg_is(name, L"windows-default")) {
-        servers = L"time.windows.com,0x8";
-        poll = 604800;
-        wcscpy(desired.type, L"NTP");
-        wcscpy(desired.ntp_server, servers);
-        desired.special_poll_interval = poll;
-        desired.has_special_poll_interval = 1;
-    } else if (arg_is(name, L"domain")) {
-        servers = L"(unchanged)";
-        mode = L"NT5DS";
-        poll = 0;
-        wcscpy(desired.type, L"NT5DS");
-    } else {
+    if (preset_lookup(name, &preset) != 0) {
         fwprintf(stderr, L"Unknown preset: %ls\n", name);
         return 2;
     }
 
     wprintf(L"Preset plan: %ls\n\n", name);
-    wprintf(L"Sync mode: %ls\n", mode);
-    wprintf(L"Servers:   %ls\n", servers);
-    if (poll != 0) {
-        wprintf(L"Poll:      %lu sec\n", (unsigned long)poll);
+    wprintf(L"Sync mode: %ls\n", preset.display_mode);
+    wprintf(L"Servers:   %ls\n", preset.display_servers);
+    if (preset.config.has_special_poll_interval) {
+        wprintf(L"Poll:      %lu sec\n", (unsigned long)preset.config.special_poll_interval);
     } else {
         wprintf(L"Poll:      unchanged\n");
     }
@@ -807,7 +785,7 @@ static int preset_dry_run(int argc, wchar_t **argv)
         return 1;
     }
 
-    if (w32time_write_config(&desired) != 0) {
+    if (w32time_write_config(&preset.config) != 0) {
         error_print_last(L"Write preset configuration");
         return 1;
     }

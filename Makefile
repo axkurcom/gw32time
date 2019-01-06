@@ -11,6 +11,7 @@ SRC := \
 	src/core/diagnostics.c \
 	src/core/error.c \
 	src/core/ntp_probe.c \
+	src/core/preset.c \
 	src/core/privilege.c \
 	src/core/registry.c \
 	src/core/service.c \
