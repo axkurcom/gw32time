@@ -34,7 +34,7 @@ static void print_help(void)
     wprintf(L"Usage:\n");
     wprintf(L"  gw32time --help\n");
     wprintf(L"  gw32time --version\n");
-    wprintf(L"  gw32time status [--raw]\n");
+    wprintf(L"  gw32time status [--raw] [--verbose]\n");
     wprintf(L"  gw32time gui\n");
     wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag\n");
@@ -191,7 +191,7 @@ static void print_peer_summary(const wchar_t *raw)
     wprintf(L"Peers:    %d\n", peers.count);
 }
 
-static int print_status(int raw)
+static int print_status(int raw, int verbose)
 {
     svc_state_t state = SVC_STATE_UNKNOWN;
     svc_start_type_t start_type = SVC_START_UNKNOWN;
@@ -228,6 +228,11 @@ static int print_status(int raw)
         print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
     }
 
+    if (verbose) {
+        print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
+        print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
+    }
+
     return 0;
 }
 
@@ -249,7 +254,7 @@ static int print_diag(void)
         wprintf(L"  Arch:    %ls\n\n", os_arch_name(os.arch));
     }
 
-    rc = print_status(0);
+    rc = print_status(0, 0);
     if (rc != 0) {
         return rc;
     }
@@ -943,7 +948,7 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"status")) {
-        return print_status(argc >= 3 && arg_is(argv[2], L"--raw"));
+        return print_status(has_arg(argc, argv, L"--raw"), has_arg(argc, argv, L"--verbose"));
     }
 
     if (arg_is(argv[1], L"gui")) {
