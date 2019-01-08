@@ -459,6 +459,25 @@ static int is_option(const wchar_t *arg)
     return arg != NULL && arg[0] == L'-';
 }
 
+static int validate_server_host(const wchar_t *host)
+{
+    const wchar_t *p;
+
+    if (host == NULL || host[0] == L'\0') {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    for (p = host; *p != L'\0'; p++) {
+        if (*p <= L' ' || *p == L',' || *p == L'"' || *p == L'\\' || *p == L'/') {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 static int parse_server_args(int argc, wchar_t **argv, ntp_peer_list_t *out)
 {
     int i;
@@ -476,8 +495,7 @@ static int parse_server_args(int argc, wchar_t **argv, ntp_peer_list_t *out)
             continue;
         }
 
-        if (argv[i][0] == L'\0' || wcschr(argv[i], L' ') != NULL || wcschr(argv[i], L'\t') != NULL) {
-            SetLastError(ERROR_INVALID_PARAMETER);
+        if (validate_server_host(argv[i]) != 0) {
             return -1;
         }
 
