@@ -67,6 +67,8 @@ int config_file_write(const wchar_t *path, const w32time_config_t *config)
     }
     write_dword_or_empty(file, "SpecialPollInterval", config->has_special_poll_interval, config->special_poll_interval);
     write_dword_or_empty(file, "NtpClientEnabled", config->has_ntp_client_enabled, config->ntp_client_enabled);
+    write_dword_or_empty(file, "MinPollInterval", config->has_min_poll_interval, config->min_poll_interval);
+    write_dword_or_empty(file, "MaxPollInterval", config->has_max_poll_interval, config->max_poll_interval);
     fclose(file);
     return 0;
 }
@@ -192,6 +194,16 @@ int config_file_read(const wchar_t *path, w32time_config_t *config)
             }
         } else if (strcmp(name, "NtpClientEnabled") == 0) {
             if (read_dword_value(value, &config->ntp_client_enabled, &config->has_ntp_client_enabled) != 0) {
+                fclose(file);
+                return -1;
+            }
+        } else if (strcmp(name, "MinPollInterval") == 0) {
+            if (read_dword_value(value, &config->min_poll_interval, &config->has_min_poll_interval) != 0) {
+                fclose(file);
+                return -1;
+            }
+        } else if (strcmp(name, "MaxPollInterval") == 0) {
+            if (read_dword_value(value, &config->max_poll_interval, &config->has_max_poll_interval) != 0) {
                 fclose(file);
                 return -1;
             }
