@@ -128,6 +128,18 @@ int w32time_write_config(const w32time_config_t *cfg)
         }
     }
 
+    if (cfg->has_min_poll_interval) {
+        if (reg_write_dword(HKEY_LOCAL_MACHINE, W32TIME_CONFIG, L"MinPollInterval", cfg->min_poll_interval) != 0) {
+            return -1;
+        }
+    }
+
+    if (cfg->has_max_poll_interval) {
+        if (reg_write_dword(HKEY_LOCAL_MACHINE, W32TIME_CONFIG, L"MaxPollInterval", cfg->max_poll_interval) != 0) {
+            return -1;
+        }
+    }
+
     return 0;
 }
 
