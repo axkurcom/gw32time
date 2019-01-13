@@ -47,6 +47,7 @@ static void print_help(void)
     wprintf(L"  gw32time preset desktop|windows-default|domain [--dry-run] [--yes]\n");
     wprintf(L"  gw32time backup <file>\n");
     wprintf(L"  gw32time restore <file> [--dry-run] [--yes]\n");
+    wprintf(L"  gw32time menu\n");
     wprintf(L"  gw32time sync [--yes]\n");
 }
 
@@ -944,11 +945,121 @@ static int restore_config(int argc, wchar_t **argv)
     return 0;
 }
 
+static void menu_pause(void)
+{
+    wchar_t input[8];
+
+    wprintf(L"\nPress Enter to return to the menu.");
+    fgetws(input, sizeof(input) / sizeof(input[0]), stdin);
+}
+
+static wchar_t *menu_next_token(wchar_t **cursor)
+{
+    wchar_t *start;
+
+    while (**cursor == L' ' || **cursor == L'\t' || **cursor == L'\r' || **cursor == L'\n') {
+        (*cursor)++;
+    }
+
+    if (**cursor == L'\0') {
+        return NULL;
+    }
+
+    start = *cursor;
+    while (**cursor != L'\0' && **cursor != L' ' && **cursor != L'\t' && **cursor != L'\r' && **cursor != L'\n') {
+        (*cursor)++;
+    }
+
+    if (**cursor != L'\0') {
+        **cursor = L'\0';
+        (*cursor)++;
+    }
+
+    return start;
+}
+
+static int menu_edit_servers(void)
+{
+    wchar_t line[1024];
+    wchar_t *cursor;
+    wchar_t *argv[24];
+    int argc = 3;
+    wchar_t *token;
+
+    wprintf(L"\nEdit NTP servers\n\n");
+    list_servers();
+    wprintf(L"\nEnter server hosts separated by spaces.\n");
+    wprintf(L"Leave empty to cancel.\n");
+    wprintf(L"Servers: ");
+
+    if (fgetws(line, sizeof(line) / sizeof(line[0]), stdin) == NULL) {
+        return 1;
+    }
+
+    argv[0] = L"gw32time";
+    argv[1] = L"servers";
+    argv[2] = L"set";
+    cursor = line;
+    while ((token = menu_next_token(&cursor)) != NULL) {
+        if (argc >= (int)(sizeof(argv) / sizeof(argv[0]))) {
+            fwprintf(stderr, L"Too many servers entered.\n");
+            return 2;
+        }
+        argv[argc++] = token;
+    }
+
+    if (argc == 3) {
+        wprintf(L"Edit cancelled.\n");
+        return 0;
+    }
+
+    return print_servers_set_dry_run(argc, argv);
+}
+
+static int run_menu(void)
+{
+    wchar_t input[32];
+
+    for (;;) {
+        wprintf(L"\n");
+        print_status(0, 0);
+        wprintf(L"\n");
+        print_health();
+        wprintf(L"\nActions:\n");
+        wprintf(L"  1. Show full status\n");
+        wprintf(L"  2. Sync now\n");
+        wprintf(L"  3. Edit NTP servers\n");
+        wprintf(L"  0. Exit\n\n");
+        wprintf(L"Select: ");
+
+        if (fgetws(input, sizeof(input) / sizeof(input[0]), stdin) == NULL) {
+            return 0;
+        }
+
+        if (input[0] == L'0') {
+            return 0;
+        } else if (input[0] == L'1') {
+            wprintf(L"\nFull status\n\n");
+            print_status(1, 1);
+            menu_pause();
+        } else if (input[0] == L'2') {
+            wchar_t *argv_sync[] = { L"gw32time", L"sync" };
+            run_sync_now(2, argv_sync);
+            menu_pause();
+        } else if (input[0] == L'3') {
+            menu_edit_servers();
+            menu_pause();
+        } else {
+            wprintf(L"Unknown selection.\n");
+            menu_pause();
+        }
+    }
+}
+
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
-        print_help();
-        return 0;
+        return run_menu();
     }
 
     if (arg_is(argv[1], L"--help") || arg_is(argv[1], L"-h")) {
@@ -963,6 +1074,10 @@ int cli_dispatch(int argc, wchar_t **argv)
 
     if (arg_is(argv[1], L"--admin")) {
         return print_admin_status();
+    }
+
+    if (arg_is(argv[1], L"menu")) {
+        return run_menu();
     }
 
     if (arg_is(argv[1], L"status")) {
