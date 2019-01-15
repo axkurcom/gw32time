@@ -286,6 +286,15 @@ static int print_health(void)
     return health.state == HEALTH_BROKEN ? 1 : 0;
 }
 
+static void print_resync_failure_hints(void)
+{
+    fwprintf(stderr, L"Try:\n");
+    fwprintf(stderr, L"  - run 'gw32time health'\n");
+    fwprintf(stderr, L"  - run 'gw32time servers list'\n");
+    fwprintf(stderr, L"  - test UDP/123 with 'gw32time servers test <host>'\n");
+    fwprintf(stderr, L"  - run 'gw32time diag' for raw w32tm output\n");
+}
+
 static int has_arg(int argc, wchar_t **argv, const wchar_t *value)
 {
     int i;
@@ -358,7 +367,7 @@ static int run_sync_now(int argc, wchar_t **argv)
 
     if (result.exit_code != 0) {
         fwprintf(stderr, L"Resync failed with exit code %lu.\n", (unsigned long)result.exit_code);
-        fwprintf(stderr, L"Try 'gw32time diag' for service, peer, and configuration details.\n");
+        print_resync_failure_hints();
         return 1;
     }
 
