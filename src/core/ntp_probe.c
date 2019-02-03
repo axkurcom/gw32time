@@ -1,9 +1,9 @@
-#include "ntp_probe.h"
-
 #include <stdio.h>
 #include <string.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+
+#include "ntp_probe.h"
 
 #define NTP_UNIX_EPOCH_DELTA 2208988800UL
 
