@@ -6,6 +6,7 @@
 
 #include "../core/config_file.h"
 #include "../core/diagnostics.h"
+#include "../core/domain.h"
 #include "../core/error.h"
 #include "../core/ntp_probe.h"
 #include "../core/preset.h"
@@ -41,7 +42,7 @@ static void print_help(void)
     wprintf(L"  gw32time service status|start|restart\n");
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers test <host>\n");
-    wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
+    wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync] [--force-domain]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
     wprintf(L"  gw32time preset desktop|windows-default|domain [--dry-run] [--yes]\n");
@@ -197,6 +198,7 @@ static int print_status(int raw, int verbose)
     svc_state_t state = SVC_STATE_UNKNOWN;
     svc_start_type_t start_type = SVC_START_UNKNOWN;
     w32time_config_t config;
+    domain_info_t domain;
 
     if (svc_query_state(L"w32time", &state) != 0) {
         state = SVC_STATE_UNKNOWN;
@@ -222,6 +224,13 @@ static int print_status(int raw, int verbose)
         wprintf(L"Poll:     %lu sec\n", (unsigned long)config.special_poll_interval);
     } else {
         wprintf(L"Poll:     unknown\n");
+    }
+    if (domain_query(&domain) == 0 && domain.joined) {
+        wprintf(L"Domain:   joined");
+        if (domain.name[0] != L'\0') {
+            wprintf(L" (%ls)", domain.name);
+        }
+        wprintf(L"\n");
     }
     print_admin_block();
 
@@ -538,12 +547,14 @@ static int print_servers_set_dry_run(int argc, wchar_t **argv)
     int dry_run = has_arg(argc, argv, L"--dry-run");
     int assume_yes = has_arg(argc, argv, L"--yes");
     int no_sync = has_arg(argc, argv, L"--no-sync");
+    int force_domain = has_arg(argc, argv, L"--force-domain");
     int is_admin = 0;
+    domain_info_t domain;
     w32tm_raw_result_t result;
 
     if (parse_server_args(argc, argv, &desired) != 0) {
         error_print_last(L"Parse server arguments");
-        fwprintf(stderr, L"Usage: gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
+        fwprintf(stderr, L"Usage: gw32time servers set <host...> [--dry-run] [--yes] [--no-sync] [--force-domain]\n");
         return 2;
     }
 
@@ -572,8 +583,26 @@ static int print_servers_set_dry_run(int argc, wchar_t **argv)
         wprintf(L"  - run w32tm /resync\n");
     }
 
+    if (domain_query(&domain) == 0 && domain.joined) {
+        wprintf(L"\nDomain-joined machine detected");
+        if (domain.name[0] != L'\0') {
+            wprintf(L": %ls", domain.name);
+        }
+        wprintf(L".\n");
+        wprintf(L"Manual NTP changes may be overwritten by policy or break domain expectations.\n");
+        if (!force_domain) {
+            wprintf(L"Use --force-domain to apply anyway.\n");
+        }
+    }
+
     if (dry_run) {
         return 0;
+    }
+
+    if (domain_query(&domain) == 0 && domain.joined && !force_domain) {
+        fwprintf(stderr, L"\nRefusing manual NTP changes on a domain-joined machine.\n");
+        fwprintf(stderr, L"Use --force-domain to override.\n");
+        return 1;
     }
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
@@ -1146,7 +1175,7 @@ int cli_dispatch(int argc, wchar_t **argv)
 
         fwprintf(stderr, L"Usage: gw32time servers list\n");
         fwprintf(stderr, L"       gw32time servers test <host>\n");
-        fwprintf(stderr, L"       gw32time servers set <host...> [--dry-run] [--yes] [--no-sync]\n");
+        fwprintf(stderr, L"       gw32time servers set <host...> [--dry-run] [--yes] [--no-sync] [--force-domain]\n");
         return 2;
     }
 
