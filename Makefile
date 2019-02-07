@@ -21,8 +21,11 @@ SRC := \
 	src/core/w32time.c \
 	src/core/w32tm.c
 
-CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -ffunction-sections -fdata-sections -DUNICODE -D_UNICODE
-LDFLAGS := -municode -Wl,--gc-sections -ladvapi32 -lcomdlg32 -lnetapi32 -lws2_32
+CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -march=i686 -mno-sse -mno-sse2 -mno-mmx -mfpmath=387 \
+	-ffunction-sections -fdata-sections -DWINVER=0x0501 -D_WIN32_WINNT=0x0501 \
+	-DNTDDI_VERSION=0x05010000 -DUNICODE -D_UNICODE
+LDFLAGS := -municode -Wl,--gc-sections -Wl,--major-subsystem-version,5 -Wl,--minor-subsystem-version,1 \
+	-ladvapi32 -lcomdlg32 -lnetapi32 -lws2_32
 
 .PHONY: all clean
 
