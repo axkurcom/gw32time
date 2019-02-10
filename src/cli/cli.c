@@ -176,6 +176,24 @@ static void print_w32tm_block(const wchar_t *title, int (*query)(w32tm_raw_resul
     }
 }
 
+static int have_admin_token(void)
+{
+    int is_admin = 0;
+
+    return privilege_is_admin(&is_admin) == 0 && is_admin;
+}
+
+static void print_w32tm_configuration_if_allowed(void)
+{
+    if (!have_admin_token()) {
+        wprintf(L"\nw32tm /query /configuration:\n");
+        wprintf(L"  Skipped: requires administrator privileges.\n");
+        return;
+    }
+
+    print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
+}
+
 static void print_peer_summary(const wchar_t *raw)
 {
     ntp_peer_list_t peers;
@@ -240,7 +258,7 @@ static int print_status(int raw, int verbose)
 
     if (verbose) {
         print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
-        print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
+        print_w32tm_configuration_if_allowed();
     }
 
     return 0;
@@ -277,7 +295,7 @@ static int print_diag(void)
 
     print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
     print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
-    print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
+    print_w32tm_configuration_if_allowed();
     return 0;
 }
 
@@ -1078,7 +1096,9 @@ static int run_menu(void)
             return 0;
         } else if (input[0] == L'1') {
             wprintf(L"\nFull status\n\n");
-            print_status(1, 1);
+            print_status(0, 0);
+            wprintf(L"\n");
+            poll_get();
             menu_pause();
         } else if (input[0] == L'2') {
             wchar_t *argv_sync[] = { L"gw32time", L"sync" };
