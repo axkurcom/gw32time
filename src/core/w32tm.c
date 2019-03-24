@@ -212,6 +212,85 @@ static int w32tm_query_raw(const wchar_t *cmdline, w32tm_raw_result_t *out)
         &out->exit_code);
 }
 
+static int copy_trimmed_value(wchar_t *dst, size_t dst_chars, const wchar_t *first, const wchar_t *last)
+{
+    size_t len;
+
+    while (first < last && (*first == L' ' || *first == L'\t')) {
+        first++;
+    }
+
+    while (last > first && (last[-1] == L' ' || last[-1] == L'\t' || last[-1] == L'\r')) {
+        last--;
+    }
+
+    len = (size_t)(last - first);
+    if (len >= dst_chars) {
+        len = dst_chars - 1;
+    }
+
+    if (len > 0) {
+        wmemcpy(dst, first, len);
+    }
+    dst[len] = L'\0';
+    return len > 0 ? 1 : 0;
+}
+
+static int copy_line_value(const wchar_t *line, const wchar_t *name, wchar_t *dst, size_t dst_chars)
+{
+    size_t name_len = wcslen(name);
+    const wchar_t *value;
+    const wchar_t *end;
+
+    if (_wcsnicmp(line, name, name_len) != 0 || line[name_len] != L':') {
+        return 0;
+    }
+
+    value = line + name_len + 1;
+    end = value;
+    while (*end != L'\0' && *end != L'\n') {
+        end++;
+    }
+
+    return copy_trimmed_value(dst, dst_chars, value, end);
+}
+
+int w32tm_parse_status_summary(const wchar_t *raw, w32tm_status_summary_t *out)
+{
+    const wchar_t *line;
+
+    if (raw == NULL || out == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    memset(out, 0, sizeof(*out));
+    line = raw;
+    while (*line != L'\0') {
+        out->has_source |= copy_line_value(line, L"Source", out->source, sizeof(out->source) / sizeof(out->source[0]));
+        out->has_stratum |= copy_line_value(line, L"Stratum", out->stratum, sizeof(out->stratum) / sizeof(out->stratum[0]));
+        out->has_last_sync |= copy_line_value(
+            line,
+            L"Last Successful Sync Time",
+            out->last_sync,
+            sizeof(out->last_sync) / sizeof(out->last_sync[0]));
+        out->has_poll_interval |= copy_line_value(
+            line,
+            L"Poll Interval",
+            out->poll_interval,
+            sizeof(out->poll_interval) / sizeof(out->poll_interval[0]));
+
+        while (*line != L'\0' && *line != L'\n') {
+            line++;
+        }
+        if (*line == L'\n') {
+            line++;
+        }
+    }
+
+    return 0;
+}
+
 int w32tm_query_status_raw(w32tm_raw_result_t *out)
 {
     return w32tm_query_raw(L"w32tm /query /status", out);
