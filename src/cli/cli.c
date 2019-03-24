@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+#include "format.h"
+
 #include "../core/config_file.h"
 #include "../core/diagnostics.h"
 #include "../core/domain.h"
@@ -31,7 +33,8 @@ static void print_version(void)
 
 static void print_help(void)
 {
-    wprintf(L"GW32TIME - Windows Time Service control frontend\n\n");
+    format_title();
+    wprintf(L"\n");
     wprintf(L"Usage:\n");
     wprintf(L"  gw32time --help\n");
     wprintf(L"  gw32time --version\n");
@@ -80,10 +83,10 @@ static int print_service_status(void)
         return 1;
     }
 
-    wprintf(L"Service:\n");
-    wprintf(L"  Name:       w32time\n");
-    wprintf(L"  State:      %ls\n", svc_state_name(state));
-    wprintf(L"  Start type: %ls\n", svc_start_type_name(start_type));
+    format_section(L"Service");
+    format_field(L"Name", L"w32time");
+    format_field(L"State", svc_state_name(state));
+    format_field(L"Start", svc_start_type_name(start_type));
     return 0;
 }
 
@@ -127,13 +130,13 @@ static void print_admin_block(void)
 {
     int is_admin = 0;
 
-    wprintf(L"\nPrivileges:\n");
+    format_section(L"Privileges");
     if (privilege_is_admin(&is_admin) != 0) {
-        wprintf(L"  Admin:   unknown\n");
+        format_field(L"Admin", L"unknown");
         return;
     }
 
-    wprintf(L"  Admin:   %ls\n", is_admin ? L"yes" : L"no");
+    format_field(L"Admin", is_admin ? L"yes" : L"no");
 }
 
 static void print_server_summary(const wchar_t *raw)
@@ -231,8 +234,8 @@ static int print_status(int raw, int verbose)
         return 1;
     }
 
-    wprintf(L"GW32TIME\n");
-    wprintf(L"Graphical UI for Windows Time Service\n\n");
+    format_title();
+    wprintf(L"\n\n");
     wprintf(L"Service:  %ls\n", svc_state_name(state));
     wprintf(L"Start:    %ls\n", svc_start_type_name(start_type));
     wprintf(L"Type:     %ls\n", config.type[0] ? config.type : L"unknown");
