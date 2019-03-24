@@ -197,6 +197,38 @@ static void print_w32tm_configuration_if_allowed(void)
     print_w32tm_block(L"w32tm /query /configuration", w32tm_query_configuration_raw);
 }
 
+static void print_runtime_summary(void)
+{
+    w32tm_raw_result_t raw;
+    w32tm_status_summary_t summary;
+
+    if (w32tm_query_status_raw(&raw) != 0 || raw.exit_code != 0) {
+        format_section(L"Runtime");
+        format_field(L"Status", L"unavailable");
+        return;
+    }
+
+    if (w32tm_parse_status_summary(raw.raw, &summary) != 0) {
+        format_section(L"Runtime");
+        format_field(L"Status", L"unparsed");
+        return;
+    }
+
+    format_section(L"Runtime");
+    if (summary.has_source) {
+        format_field(L"Source", summary.source);
+    }
+    if (summary.has_stratum) {
+        format_field(L"Stratum", summary.stratum);
+    }
+    if (summary.has_last_sync) {
+        format_field(L"LastSync", summary.last_sync);
+    }
+    if (summary.has_poll_interval) {
+        format_field(L"Poll", summary.poll_interval);
+    }
+}
+
 static void print_peer_summary(const wchar_t *raw)
 {
     ntp_peer_list_t peers;
@@ -296,6 +328,7 @@ static int print_diag(void)
         wprintf(L"  Reason: %ls\n", health.reason);
     }
 
+    print_runtime_summary();
     print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
     print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
     print_w32tm_configuration_if_allowed();
