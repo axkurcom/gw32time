@@ -1108,6 +1108,28 @@ static int menu_edit_servers(void)
     return print_servers_set_dry_run(argc, argv);
 }
 
+static int menu_test_server(void)
+{
+    wchar_t line[256];
+    wchar_t *cursor;
+    wchar_t *host;
+
+    wprintf(L"\nTest NTP server\n\n");
+    wprintf(L"Host: ");
+    if (fgetws(line, sizeof(line) / sizeof(line[0]), stdin) == NULL) {
+        return 1;
+    }
+
+    cursor = line;
+    host = menu_next_token(&cursor);
+    if (host == NULL) {
+        wprintf(L"Test cancelled.\n");
+        return 0;
+    }
+
+    return test_server(host);
+}
+
 static int run_menu(void)
 {
     wchar_t input[32];
@@ -1122,6 +1144,7 @@ static int run_menu(void)
         wprintf(L"  1. Show full status\n");
         wprintf(L"  2. Sync now\n");
         wprintf(L"  3. Edit NTP servers\n");
+        wprintf(L"  4. Test NTP server\n");
         wprintf(L"  0. Exit\n\n");
         wprintf(L"Select: ");
 
@@ -1143,6 +1166,9 @@ static int run_menu(void)
             menu_pause();
         } else if (input[0] == L'3') {
             menu_edit_servers();
+            menu_pause();
+        } else if (input[0] == L'4') {
+            menu_test_server();
             menu_pause();
         } else {
             wprintf(L"Unknown selection.\n");
