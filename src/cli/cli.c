@@ -1115,6 +1115,7 @@ static int run_menu(void)
     for (;;) {
         wprintf(L"\n");
         print_status(0, 0);
+        print_runtime_summary();
         wprintf(L"\n");
         print_health();
         wprintf(L"\nActions:\n");
