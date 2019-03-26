@@ -1127,6 +1127,11 @@ static int menu_test_server(void)
         return 0;
     }
 
+    if (menu_next_token(&cursor) != NULL) {
+        fwprintf(stderr, L"Enter one server host only.\n");
+        return 2;
+    }
+
     return test_server(host);
 }
 
