@@ -2,6 +2,12 @@
 
 #include <string.h>
 
+static const wchar_t *PRESET_NAMES[] = {
+    L"desktop",
+    L"windows-default",
+    L"domain"
+};
+
 static int name_is(const wchar_t *left, const wchar_t *right)
 {
     return lstrcmpiW(left, right) == 0;
@@ -58,4 +64,18 @@ int preset_lookup(const wchar_t *name, preset_t *out)
 
     SetLastError(ERROR_NOT_FOUND);
     return -1;
+}
+
+int preset_count(void)
+{
+    return (int)(sizeof(PRESET_NAMES) / sizeof(PRESET_NAMES[0]));
+}
+
+const wchar_t *preset_name_at(int index)
+{
+    if (index < 0 || index >= preset_count()) {
+        return NULL;
+    }
+
+    return PRESET_NAMES[index];
 }
