@@ -1147,6 +1147,31 @@ static int menu_test_server(void)
     return test_server(host);
 }
 
+static int menu_apply_preset(void)
+{
+    wchar_t line[64];
+    wchar_t *cursor;
+    wchar_t *name;
+    wchar_t *argv_preset[] = { L"gw32time", L"preset", NULL };
+
+    wprintf(L"\nApply preset\n\n");
+    preset_list();
+    wprintf(L"\nPreset: ");
+    if (fgetws(line, sizeof(line) / sizeof(line[0]), stdin) == NULL) {
+        return 1;
+    }
+
+    cursor = line;
+    name = menu_next_token(&cursor);
+    if (name == NULL) {
+        wprintf(L"Preset cancelled.\n");
+        return 0;
+    }
+
+    argv_preset[2] = name;
+    return preset_dry_run(3, argv_preset);
+}
+
 static int run_menu(void)
 {
     wchar_t input[32];
@@ -1162,6 +1187,7 @@ static int run_menu(void)
         wprintf(L"  2. Sync now\n");
         wprintf(L"  3. Edit NTP servers\n");
         wprintf(L"  4. Test NTP server\n");
+        wprintf(L"  5. Apply preset\n");
         wprintf(L"  0. Exit\n\n");
         wprintf(L"Select: ");
 
@@ -1186,6 +1212,9 @@ static int run_menu(void)
             menu_pause();
         } else if (input[0] == L'4') {
             menu_test_server();
+            menu_pause();
+        } else if (input[0] == L'5') {
+            menu_apply_preset();
             menu_pause();
         } else {
             wprintf(L"Unknown selection.\n");
