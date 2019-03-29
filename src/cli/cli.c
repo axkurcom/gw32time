@@ -1172,6 +1172,28 @@ static int menu_apply_preset(void)
     return preset_dry_run(3, argv_preset);
 }
 
+static int menu_backup_config(void)
+{
+    wchar_t line[260];
+    wchar_t *cursor;
+    wchar_t *path;
+
+    wprintf(L"\nBackup configuration\n\n");
+    wprintf(L"File: ");
+    if (fgetws(line, sizeof(line) / sizeof(line[0]), stdin) == NULL) {
+        return 1;
+    }
+
+    cursor = line;
+    path = menu_next_token(&cursor);
+    if (path == NULL) {
+        wprintf(L"Backup cancelled.\n");
+        return 0;
+    }
+
+    return backup_config(path);
+}
+
 static int run_menu(void)
 {
     wchar_t input[32];
@@ -1188,6 +1210,7 @@ static int run_menu(void)
         wprintf(L"  3. Edit NTP servers\n");
         wprintf(L"  4. Test NTP server\n");
         wprintf(L"  5. Apply preset\n");
+        wprintf(L"  6. Backup config\n");
         wprintf(L"  0. Exit\n\n");
         wprintf(L"Select: ");
 
@@ -1215,6 +1238,9 @@ static int run_menu(void)
             menu_pause();
         } else if (input[0] == L'5') {
             menu_apply_preset();
+            menu_pause();
+        } else if (input[0] == L'6') {
+            menu_backup_config();
             menu_pause();
         } else {
             wprintf(L"Unknown selection.\n");
