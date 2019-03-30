@@ -1194,6 +1194,30 @@ static int menu_backup_config(void)
     return backup_config(path);
 }
 
+static int menu_restore_config(void)
+{
+    wchar_t line[260];
+    wchar_t *cursor;
+    wchar_t *path;
+    wchar_t *argv_restore[] = { L"gw32time", L"restore", NULL, L"--dry-run" };
+
+    wprintf(L"\nRestore configuration\n\n");
+    wprintf(L"File: ");
+    if (fgetws(line, sizeof(line) / sizeof(line[0]), stdin) == NULL) {
+        return 1;
+    }
+
+    cursor = line;
+    path = menu_next_token(&cursor);
+    if (path == NULL) {
+        wprintf(L"Restore cancelled.\n");
+        return 0;
+    }
+
+    argv_restore[2] = path;
+    return restore_config(4, argv_restore);
+}
+
 static int run_menu(void)
 {
     wchar_t input[32];
@@ -1211,6 +1235,7 @@ static int run_menu(void)
         wprintf(L"  4. Test NTP server\n");
         wprintf(L"  5. Apply preset\n");
         wprintf(L"  6. Backup config\n");
+        wprintf(L"  7. Preview restore\n");
         wprintf(L"  0. Exit\n\n");
         wprintf(L"Select: ");
 
@@ -1241,6 +1266,9 @@ static int run_menu(void)
             menu_pause();
         } else if (input[0] == L'6') {
             menu_backup_config();
+            menu_pause();
+        } else if (input[0] == L'7') {
+            menu_restore_config();
             menu_pause();
         } else {
             wprintf(L"Unknown selection.\n");
