@@ -8,6 +8,12 @@ static const wchar_t *PRESET_NAMES[] = {
     L"domain"
 };
 
+static const wchar_t *PRESET_DESCRIPTIONS[] = {
+    L"manual public NTP with moderate polling",
+    L"Microsoft default server and daily-ish polling",
+    L"domain hierarchy mode"
+};
+
 static int name_is(const wchar_t *left, const wchar_t *right)
 {
     return lstrcmpiW(left, right) == 0;
@@ -78,4 +84,13 @@ const wchar_t *preset_name_at(int index)
     }
 
     return PRESET_NAMES[index];
+}
+
+const wchar_t *preset_description_at(int index)
+{
+    if (index < 0 || index >= preset_count()) {
+        return NULL;
+    }
+
+    return PRESET_DESCRIPTIONS[index];
 }

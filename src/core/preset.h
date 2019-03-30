@@ -13,5 +13,6 @@ typedef struct {
 int preset_lookup(const wchar_t *name, preset_t *out);
 int preset_count(void);
 const wchar_t *preset_name_at(int index);
+const wchar_t *preset_description_at(int index);
 
 #endif

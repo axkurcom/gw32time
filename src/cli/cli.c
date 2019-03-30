@@ -934,7 +934,7 @@ static int preset_list(void)
 
     wprintf(L"Presets:\n");
     for (i = 0; i < preset_count(); i++) {
-        wprintf(L"  %ls\n", preset_name_at(i));
+        wprintf(L"  %-16ls %ls\n", preset_name_at(i), preset_description_at(i));
     }
     return 0;
 }
