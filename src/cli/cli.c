@@ -41,7 +41,7 @@ static void print_help(void)
     wprintf(L"  gw32time status [--raw] [--verbose]\n");
     wprintf(L"  gw32time gui\n");
     wprintf(L"  gw32time health\n");
-    wprintf(L"  gw32time diag\n");
+    wprintf(L"  gw32time diag [--raw]\n");
     wprintf(L"  gw32time service status|start|restart\n");
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers test <host>\n");
@@ -300,7 +300,7 @@ static int print_status(int raw, int verbose)
     return 0;
 }
 
-static int print_diag(void)
+static int print_diag(int raw)
 {
     int rc;
     health_t health;
@@ -330,9 +330,11 @@ static int print_diag(void)
     }
 
     print_runtime_summary();
-    print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
-    print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
-    print_w32tm_configuration_if_allowed();
+    if (raw) {
+        print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
+        print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
+        print_w32tm_configuration_if_allowed();
+    }
     return 0;
 }
 
@@ -1310,7 +1312,7 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"diag")) {
-        return print_diag();
+        return print_diag(has_arg(argc, argv, L"--raw"));
     }
 
     if (arg_is(argv[1], L"health")) {
