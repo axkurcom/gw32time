@@ -40,6 +40,7 @@ static void print_help(void)
     wprintf(L"  gw32time --version\n");
     wprintf(L"  gw32time status [--raw] [--verbose]\n");
     wprintf(L"  gw32time gui\n");
+    wprintf(L"  gw32time runtime\n");
     wprintf(L"  gw32time health\n");
     wprintf(L"  gw32time diag [--raw]\n");
     wprintf(L"  gw32time service status|start|restart\n");
@@ -1309,6 +1310,11 @@ int cli_dispatch(int argc, wchar_t **argv)
 
     if (arg_is(argv[1], L"gui")) {
         return gui_launch(GetModuleHandleW(NULL));
+    }
+
+    if (arg_is(argv[1], L"runtime")) {
+        print_runtime_summary();
+        return 0;
     }
 
     if (arg_is(argv[1], L"diag")) {
