@@ -203,6 +203,8 @@ static void print_runtime_summary(void)
 {
     w32tm_raw_result_t raw;
     w32tm_status_summary_t summary;
+    wchar_t source_host[256];
+    wchar_t *comma;
 
     if (w32tm_query_status_raw(&raw) != 0 || raw.exit_code != 0) {
         format_section(L"Runtime");
@@ -218,7 +220,13 @@ static void print_runtime_summary(void)
 
     format_section(L"Runtime");
     if (summary.has_source) {
-        format_field(L"Source", summary.source);
+        wcsncpy(source_host, summary.source, (sizeof(source_host) / sizeof(source_host[0])) - 1);
+        source_host[(sizeof(source_host) / sizeof(source_host[0])) - 1] = L'\0';
+        comma = wcschr(source_host, L',');
+        if (comma != NULL) {
+            *comma = L'\0';
+        }
+        format_field(L"Source", source_host);
     }
     if (summary.has_stratum) {
         format_field(L"Stratum", summary.stratum);
