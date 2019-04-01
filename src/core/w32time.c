@@ -273,3 +273,17 @@ int ntp_format_peer_list(const ntp_peer_list_t *list, wchar_t *buf, size_t chars
 
     return 0;
 }
+
+const wchar_t *ntp_peer_flags_description(DWORD flags)
+{
+    switch (flags) {
+    case 0x1:
+        return L"special poll interval";
+    case 0x8:
+        return L"client";
+    case 0x9:
+        return L"client, special poll interval";
+    default:
+        return L"custom Windows Time flags";
+    }
+}

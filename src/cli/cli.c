@@ -443,20 +443,6 @@ static int run_sync_now(int argc, wchar_t **argv)
     return 0;
 }
 
-static const wchar_t *peer_flags_description(DWORD flags)
-{
-    switch (flags) {
-    case 0x1:
-        return L"special poll interval";
-    case 0x8:
-        return L"client";
-    case 0x9:
-        return L"client, special poll interval";
-    default:
-        return L"custom Windows Time flags";
-    }
-}
-
 static int list_servers(void)
 {
     w32time_config_t config;
@@ -493,7 +479,7 @@ static int list_servers(void)
         wprintf(
             L"     Flags: 0x%lx (%ls)\n",
             (unsigned long)peers.peers[i].flags,
-            peer_flags_description(peers.peers[i].flags));
+            ntp_peer_flags_description(peers.peers[i].flags));
     }
 
     return 0;

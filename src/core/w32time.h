@@ -36,5 +36,6 @@ int w32time_write_manual_servers(const wchar_t *peerlist);
 int w32time_write_poll_interval(DWORD seconds);
 int ntp_parse_peer_list(const wchar_t *raw, ntp_peer_list_t *out);
 int ntp_format_peer_list(const ntp_peer_list_t *list, wchar_t *buf, size_t chars);
+const wchar_t *ntp_peer_flags_description(DWORD flags);
 
 #endif
