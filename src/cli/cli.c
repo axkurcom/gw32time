@@ -63,11 +63,13 @@ static int print_admin_status(void)
     int is_admin = 0;
     int rc = privilege_is_admin(&is_admin);
     if (rc != 0) {
-        fwprintf(stderr, L"Admin: unknown\n");
+        format_section(L"Privileges");
+        format_field(L"Admin", L"unknown");
         return rc;
     }
 
-    wprintf(L"Admin: %ls\n", is_admin ? L"yes" : L"no");
+    format_section(L"Privileges");
+    format_field(L"Admin", is_admin ? L"yes" : L"no");
     return 0;
 }
 
