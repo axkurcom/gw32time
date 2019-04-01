@@ -28,7 +28,8 @@ static int arg_is(const wchar_t *arg, const wchar_t *value)
 
 static void print_version(void)
 {
-    wprintf(L"gw32time %ls\n", GW32TIME_VERSION);
+    format_title();
+    wprintf(L"Version %ls\n", GW32TIME_VERSION);
 }
 
 static void print_help(void)
