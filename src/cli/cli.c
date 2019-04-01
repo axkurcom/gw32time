@@ -719,19 +719,19 @@ static int poll_get(void)
         return 1;
     }
 
-    wprintf(L"Polling interval:\n");
+    format_section(L"Polling interval");
     if (config.has_special_poll_interval) {
-        wprintf(L"  SpecialPollInterval: %lu sec\n", (unsigned long)config.special_poll_interval);
+        format_field_dword(L"Special", config.special_poll_interval, L"sec");
     } else {
-        wprintf(L"  SpecialPollInterval: unknown\n");
+        format_field(L"Special", L"unknown");
     }
 
     if (config.has_min_poll_interval) {
-        wprintf(L"  MinPollInterval:     %lu\n", (unsigned long)config.min_poll_interval);
+        format_field_dword(L"Min", config.min_poll_interval, NULL);
     }
 
     if (config.has_max_poll_interval) {
-        wprintf(L"  MaxPollInterval:     %lu\n", (unsigned long)config.max_poll_interval);
+        format_field_dword(L"Max", config.max_poll_interval, NULL);
     }
 
     return 0;
