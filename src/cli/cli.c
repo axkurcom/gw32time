@@ -465,8 +465,8 @@ static int list_servers(void)
         return 1;
     }
 
-    wprintf(L"NTP servers:\n");
-    wprintf(L"  Raw: %ls\n", config.ntp_server[0] ? config.ntp_server : L"(none)");
+    format_section(L"NTP servers");
+    format_field(L"Raw", config.ntp_server[0] ? config.ntp_server : L"(none)");
 
     if (config.ntp_server[0] == L'\0') {
         return 0;
@@ -478,7 +478,7 @@ static int list_servers(void)
     }
 
     if (peers.count == 0) {
-        wprintf(L"  (none)\n");
+        format_field(L"Peers", L"(none)");
         return 0;
     }
 
