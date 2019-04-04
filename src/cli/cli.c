@@ -51,7 +51,7 @@ static void print_help(void)
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
     wprintf(L"  gw32time preset list\n");
-    wprintf(L"  gw32time preset desktop|windows-default|domain [--dry-run] [--yes]\n");
+    wprintf(L"  gw32time preset desktop|lab-fast|windows-default|domain [--dry-run] [--yes]\n");
     wprintf(L"  gw32time backup <file>\n");
     wprintf(L"  gw32time restore <file> [--dry-run] [--yes]\n");
     wprintf(L"  gw32time menu\n");
@@ -865,7 +865,7 @@ static int preset_dry_run(int argc, wchar_t **argv)
     w32tm_raw_result_t result;
 
     if (argc < 3) {
-        fwprintf(stderr, L"Usage: gw32time preset desktop|windows-default|domain [--dry-run] [--yes]\n");
+        fwprintf(stderr, L"Usage: gw32time preset desktop|lab-fast|windows-default|domain [--dry-run] [--yes]\n");
         return 2;
     }
 

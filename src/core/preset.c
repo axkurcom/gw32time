@@ -4,12 +4,14 @@
 
 static const wchar_t *PRESET_NAMES[] = {
     L"desktop",
+    L"lab-fast",
     L"windows-default",
     L"domain"
 };
 
 static const wchar_t *PRESET_DESCRIPTIONS[] = {
     L"manual public NTP with moderate polling",
+    L"manual public NTP with faster polling",
     L"Microsoft default server and daily-ish polling",
     L"domain hierarchy mode"
 };
@@ -57,6 +59,19 @@ int preset_lookup(const wchar_t *name, preset_t *out)
             sizeof(out->config.ntp_server) / sizeof(out->config.ntp_server[0]),
             out->display_servers);
         out->config.special_poll_interval = 604800;
+        out->config.has_special_poll_interval = 1;
+        return 0;
+    }
+
+    if (name_is(name, L"lab-fast")) {
+        out->display_mode = L"NTP/manual";
+        out->display_servers = L"time.cloudflare.com,0x8 pool.ntp.org,0x8";
+        set_string(out->config.type, sizeof(out->config.type) / sizeof(out->config.type[0]), L"NTP");
+        set_string(
+            out->config.ntp_server,
+            sizeof(out->config.ntp_server) / sizeof(out->config.ntp_server[0]),
+            out->display_servers);
+        out->config.special_poll_interval = 256;
         out->config.has_special_poll_interval = 1;
         return 0;
     }
