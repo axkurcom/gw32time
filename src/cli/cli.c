@@ -1219,6 +1219,11 @@ static int menu_restore_config(void)
         return 0;
     }
 
+    if (menu_next_token(&cursor) != NULL) {
+        fwprintf(stderr, L"Enter one restore file path only.\n");
+        return 2;
+    }
+
     argv_restore[2] = path;
     return restore_config(4, argv_restore);
 }
