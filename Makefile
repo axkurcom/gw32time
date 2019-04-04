@@ -45,3 +45,4 @@ clean:
 verify: $(TARGET)
 	i686-w64-mingw32-objdump -x $(TARGET) | grep -E "MajorSubsystemVersion|MinorSubsystemVersion"
 	i686-w64-mingw32-size $(TARGET)
+	if i686-w64-mingw32-objdump -d $(TARGET) | grep -Ei "\\b(xmm|ymm|mmx|movaps|movups|movdqa|movdqu|addps|mulps|sqrtps)\\b"; then exit 1; fi
