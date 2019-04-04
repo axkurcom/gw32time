@@ -1191,6 +1191,11 @@ static int menu_backup_config(void)
         return 0;
     }
 
+    if (menu_next_token(&cursor) != NULL) {
+        fwprintf(stderr, L"Enter one backup file path only.\n");
+        return 2;
+    }
+
     return backup_config(path);
 }
 
