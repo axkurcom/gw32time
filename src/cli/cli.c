@@ -1168,6 +1168,11 @@ static int menu_apply_preset(void)
         return 0;
     }
 
+    if (menu_next_token(&cursor) != NULL) {
+        fwprintf(stderr, L"Enter one preset name only.\n");
+        return 2;
+    }
+
     argv_preset[2] = name;
     return preset_dry_run(3, argv_preset);
 }
