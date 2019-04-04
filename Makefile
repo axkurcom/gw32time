@@ -28,7 +28,7 @@ CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -march=i686 -mno-sse -mno-sse2 -mno
 LDFLAGS := -municode -Wl,--gc-sections -Wl,--major-subsystem-version,5 -Wl,--minor-subsystem-version,1 \
 	-ladvapi32 -lcomdlg32 -lnetapi32 -lws2_32
 
-.PHONY: all clean
+.PHONY: all clean verify
 
 all: $(TARGET)
 
@@ -41,3 +41,7 @@ $(RES): src/gui/resources.rc src/gui/resource.h
 
 clean:
 	rm -f $(TARGET) $(RES)
+
+verify: $(TARGET)
+	i686-w64-mingw32-objdump -x $(TARGET) | grep -E "MajorSubsystemVersion|MinorSubsystemVersion"
+	i686-w64-mingw32-size $(TARGET)
