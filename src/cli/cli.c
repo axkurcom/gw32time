@@ -1251,6 +1251,7 @@ static int run_menu(void)
         wprintf(L"  5. Apply preset\n");
         wprintf(L"  6. Backup config\n");
         wprintf(L"  7. Preview restore\n");
+        wprintf(L"  8. Show diagnostics\n");
         wprintf(L"  0. Exit\n\n");
         wprintf(L"Select: ");
 
@@ -1284,6 +1285,9 @@ static int run_menu(void)
             menu_pause();
         } else if (input[0] == L'7') {
             menu_restore_config();
+            menu_pause();
+        } else if (input[0] == L'8') {
+            print_diag(0);
             menu_pause();
         } else {
             wprintf(L"Unknown selection.\n");
