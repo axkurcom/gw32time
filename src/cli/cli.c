@@ -1300,6 +1300,7 @@ static int run_menu(void)
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
+        FreeConsole();
         return gui_launch(GetModuleHandleW(NULL));
     }
 
@@ -1326,6 +1327,7 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"gui")) {
+        FreeConsole();
         return gui_launch(GetModuleHandleW(NULL));
     }
 
