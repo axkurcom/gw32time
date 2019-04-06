@@ -6,6 +6,7 @@
 #include "ntp_probe.h"
 
 #define NTP_UNIX_EPOCH_DELTA 2208988800UL
+#define FILETIME_TO_UNIX_EPOCH_MS 11644473600000ULL
 
 static void set_probe_error(ntp_probe_result_t *out, const wchar_t *message)
 {
@@ -35,10 +36,32 @@ static double ntp_timestamp_to_ms(const unsigned char *buf)
     return (unix_seconds + fraction_seconds) * 1000.0;
 }
 
-static void write_ntp_timestamp(unsigned char *buf, DWORD tick_ms)
+static double current_unix_time_ms(void)
 {
-    unsigned long seconds = (tick_ms / 1000UL) + NTP_UNIX_EPOCH_DELTA;
-    unsigned long fraction = (unsigned long)(((double)(tick_ms % 1000UL) / 1000.0) * 4294967296.0);
+    FILETIME ft;
+    ULARGE_INTEGER value;
+    unsigned long long unix_ms;
+
+    GetSystemTimeAsFileTime(&ft);
+    value.LowPart = ft.dwLowDateTime;
+    value.HighPart = ft.dwHighDateTime;
+
+    unix_ms = (unsigned long long)(value.QuadPart / 10000ULL);
+    if (unix_ms < FILETIME_TO_UNIX_EPOCH_MS) {
+        return 0.0;
+    }
+
+    unix_ms -= FILETIME_TO_UNIX_EPOCH_MS;
+    return (double)unix_ms;
+}
+
+static void write_ntp_timestamp(unsigned char *buf, double unix_ms)
+{
+    unsigned long long ms = (unsigned long long)(unix_ms > 0.0 ? unix_ms : 0.0);
+    unsigned long long unix_seconds = ms / 1000ULL;
+    unsigned long long unix_ms_part = ms % 1000ULL;
+    unsigned long seconds = (unsigned long)(unix_seconds + (unsigned long long)NTP_UNIX_EPOCH_DELTA);
+    unsigned long fraction = (unsigned long)(((double)unix_ms_part / 1000.0) * 4294967296.0);
 
     buf[0] = (unsigned char)((seconds >> 24) & 0xff);
     buf[1] = (unsigned char)((seconds >> 16) & 0xff);
@@ -105,7 +128,8 @@ int ntp_probe(const wchar_t *host, int timeout_ms, ntp_probe_result_t *out)
     ZeroMemory(request, sizeof(request));
     request[0] = 0x1b;
     start_ms = GetTickCount();
-    write_ntp_timestamp(request + 40, start_ms);
+    t1 = current_unix_time_ms();
+    write_ntp_timestamp(request + 40, t1);
 
     rc = sendto(sock, (const char *)request, sizeof(request), 0, resolved->ai_addr, (int)resolved->ai_addrlen);
     if (rc != sizeof(request)) {
@@ -118,6 +142,7 @@ int ntp_probe(const wchar_t *host, int timeout_ms, ntp_probe_result_t *out)
 
     received = recvfrom(sock, (char *)response, sizeof(response), 0, NULL, NULL);
     end_ms = GetTickCount();
+    t4 = current_unix_time_ms();
     closesocket(sock);
     FreeAddrInfoW(resolved);
     WSACleanup();
@@ -138,10 +163,8 @@ int ntp_probe(const wchar_t *host, int timeout_ms, ntp_probe_result_t *out)
         return 0;
     }
 
-    t1 = (double)start_ms;
     t2 = ntp_timestamp_to_ms(response + 32);
     t3 = ntp_timestamp_to_ms(response + 40);
-    t4 = (double)end_ms;
 
     out->rtt_ms = end_ms - start_ms;
     out->offset_ms = ((t2 - t1) + (t3 - t4)) / 2.0;
