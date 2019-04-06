@@ -1300,7 +1300,7 @@ static int run_menu(void)
 int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
-        return run_menu();
+        return gui_launch(GetModuleHandleW(NULL));
     }
 
     if (arg_is(argv[1], L"--help") || arg_is(argv[1], L"-h")) {
