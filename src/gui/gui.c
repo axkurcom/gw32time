@@ -10,6 +10,7 @@
 #include "resource.h"
 #include "../core/config_file.h"
 #include "../core/diagnostics.h"
+#include "../core/domain.h"
 #include "../core/ntp_probe.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
@@ -531,8 +532,12 @@ static void delete_server(HWND dialog)
 static void apply_servers(HWND dialog)
 {
     ntp_peer_list_t peers;
+    wchar_t domain_label[320];
     wchar_t peerlist[1024];
+    wchar_t warn[640];
     int is_admin = 0;
+    domain_info_t domain;
+    w32time_config_t config;
     w32tm_raw_result_t result;
     int i;
 
@@ -543,6 +548,43 @@ static void apply_servers(HWND dialog)
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
         MessageBoxW(dialog, L"Applying servers requires administrator privileges.", L"GW32TIME", MB_ICONWARNING);
         return;
+    }
+    if (w32time_read_config(&config) != 0) {
+        MessageBoxW(dialog, L"Could not read current W32Time configuration.", L"GW32TIME", MB_ICONERROR);
+        return;
+    }
+
+    ZeroMemory(&domain, sizeof(domain));
+    if (domain_query(&domain) == 0 && domain.joined) {
+        if (domain.name[0] != L'\0') {
+            _snwprintf(domain_label, sizeof(domain_label) / sizeof(domain_label[0]), L" (%ls)", domain.name);
+            domain_label[(sizeof(domain_label) / sizeof(domain_label[0])) - 1] = L'\0';
+        } else {
+            domain_label[0] = L'\0';
+        }
+
+        if (_wcsicmp(config.type, L"NT5DS") == 0) {
+            _snwprintf(
+                warn,
+                sizeof(warn) / sizeof(warn[0]),
+                L"Domain-joined machine detected%ls.\n\nCurrent Type is NT5DS.\n"
+                L"Manual NTP change can break Active Directory time hierarchy.\n\n"
+                L"Apply manual NTP servers anyway?",
+                domain_label);
+        } else {
+            _snwprintf(
+                warn,
+                sizeof(warn) / sizeof(warn[0]),
+                L"Domain-joined machine detected%ls.\n\n"
+                L"Manual NTP change may be overridden by policy or break domain time design.\n\n"
+                L"Apply manual NTP servers anyway?",
+                domain_label);
+        }
+        warn[(sizeof(warn) / sizeof(warn[0])) - 1] = L'\0';
+
+        if (MessageBoxW(dialog, warn, L"GW32TIME", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2) != IDYES) {
+            return;
+        }
     }
 
     ZeroMemory(&peers, sizeof(peers));
