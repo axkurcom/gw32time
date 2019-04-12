@@ -615,6 +615,9 @@ static void apply_servers(HWND dialog)
 
 static void probe_all_servers(HWND dialog)
 {
+    MSG msg;
+    HWND probe_button = GetDlgItem(dialog, IDC_PROBE_ALL);
+    wchar_t caption[64];
     int i;
 
     if (g_row_count <= 0) {
@@ -622,10 +625,33 @@ static void probe_all_servers(HWND dialog)
         return;
     }
 
+    EnableWindow(probe_button, FALSE);
+    EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), FALSE);
+    EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), FALSE);
+    EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), FALSE);
+    EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), FALSE);
+
     for (i = 0; i < g_row_count; i++) {
+        _snwprintf(caption, sizeof(caption) / sizeof(caption[0]), L"Probing %d/%d...", i + 1, g_row_count);
+        caption[(sizeof(caption) / sizeof(caption[0])) - 1] = L'\0';
+        SetWindowTextW(probe_button, caption);
+        UpdateWindow(dialog);
+
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
         probe_server_row(i);
+        server_row_to_table(GetDlgItem(dialog, IDC_SERVERS_TABLE), i);
     }
-    refresh_servers_table(dialog);
+
+    SetWindowTextW(probe_button, L"Probe all");
+    EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
+    EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
+    EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
+    EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), TRUE);
+    EnableWindow(probe_button, TRUE);
 }
 
 static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
