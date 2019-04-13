@@ -663,6 +663,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         init_servers_table(dialog);
         SetDlgItemTextW(dialog, IDC_FLAGS_EDIT, L"0x9");
         refresh_status(dialog);
+        probe_all_servers(dialog);
         return TRUE;
 
     case WM_NOTIFY:
