@@ -31,9 +31,16 @@ typedef struct {
     wchar_t ptr[256];
 } server_row_t;
 
+typedef struct {
+    int row;
+    wchar_t host[256];
+    DWORD flags;
+} server_edit_ctx_t;
+
 static HINSTANCE g_instance;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
+static int selected_row(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -70,28 +77,6 @@ static void format_flags(DWORD flags, wchar_t *buf, size_t chars)
         _snwprintf(buf, chars, L"0x%lx", (unsigned long)flags);
     }
     buf[chars - 1] = L'\0';
-}
-
-static int parse_flags(const wchar_t *text, DWORD *out)
-{
-    wchar_t *end;
-    unsigned long value;
-
-    if (text == NULL || out == NULL || text[0] == L'\0') {
-        return -1;
-    }
-
-    value = wcstoul(text, &end, 0);
-    if (*end != L'\0' || value > 0xffffffffUL) {
-        return -1;
-    }
-
-    if ((value & ~FLAG_MASK_VALID) != 0) {
-        return -1;
-    }
-
-    *out = (DWORD)value;
-    return 0;
 }
 
 static void init_servers_table(HWND dialog)
@@ -414,17 +399,16 @@ static void restore_config(HWND dialog)
 
 static void test_server(HWND dialog)
 {
-    wchar_t host[256];
     wchar_t message[512];
     ntp_probe_result_t result;
+    int row = selected_row(dialog);
 
-    GetDlgItemTextW(dialog, IDC_SERVER_EDIT, host, sizeof(host) / sizeof(host[0]));
-    if (host[0] == L'\0') {
-        MessageBoxW(dialog, L"Enter an NTP host in the Server field.", L"GW32TIME", MB_ICONWARNING);
+    if (row < 0 || row >= g_row_count) {
+        MessageBoxW(dialog, L"Select a server row to test.", L"GW32TIME", MB_ICONWARNING);
         return;
     }
 
-    if (ntp_probe(host, 3000, &result) != 0 || !result.ok) {
+    if (ntp_probe(g_rows[row].host, 3000, &result) != 0 || !result.ok) {
         _snwprintf(
             message,
             sizeof(message) / sizeof(message[0]),
@@ -451,42 +435,101 @@ static int selected_row(HWND dialog)
     return ListView_GetNextItem(GetDlgItem(dialog, IDC_SERVERS_TABLE), -1, LVNI_SELECTED);
 }
 
-static void select_row_to_edits(HWND dialog, int row)
+static DWORD read_flags_from_dialog(HWND dialog)
 {
-    wchar_t flags[64];
+    DWORD flags = 0;
 
-    if (row < 0 || row >= g_row_count) {
-        return;
+    if (IsDlgButtonChecked(dialog, IDC_DIALOG_FLAG_CLIENT) == BST_CHECKED) {
+        flags |= 0x8;
     }
+    if (IsDlgButtonChecked(dialog, IDC_DIALOG_FLAG_SPECIAL) == BST_CHECKED) {
+        flags |= 0x1;
+    }
+    if (IsDlgButtonChecked(dialog, IDC_DIALOG_FLAG_FALLBACK) == BST_CHECKED) {
+        flags |= 0x2;
+    }
+    if (IsDlgButtonChecked(dialog, IDC_DIALOG_FLAG_SYMMETRIC) == BST_CHECKED) {
+        flags |= 0x4;
+    }
+    return flags;
+}
 
-    SetDlgItemTextW(dialog, IDC_SERVER_EDIT, g_rows[row].host);
-    _snwprintf(flags, sizeof(flags) / sizeof(flags[0]), L"0x%lx", (unsigned long)g_rows[row].flags);
-    flags[(sizeof(flags) / sizeof(flags[0])) - 1] = L'\0';
-    SetDlgItemTextW(dialog, IDC_FLAGS_EDIT, flags);
+static void write_flags_to_dialog(HWND dialog, DWORD flags)
+{
+    CheckDlgButton(dialog, IDC_DIALOG_FLAG_CLIENT, (flags & 0x8) ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dialog, IDC_DIALOG_FLAG_SPECIAL, (flags & 0x1) ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dialog, IDC_DIALOG_FLAG_FALLBACK, (flags & 0x2) ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dialog, IDC_DIALOG_FLAG_SYMMETRIC, (flags & 0x4) ? BST_CHECKED : BST_UNCHECKED);
+}
+
+static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    server_edit_ctx_t *ctx = (server_edit_ctx_t *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
+
+    switch (message) {
+    case WM_INITDIALOG:
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, lparam);
+        ctx = (server_edit_ctx_t *)lparam;
+        if (ctx != NULL) {
+            SetDlgItemTextW(dialog, IDC_DIALOG_SERVER, ctx->host);
+            write_flags_to_dialog(dialog, ctx->flags);
+        }
+        return TRUE;
+
+    case WM_COMMAND:
+        if (LOWORD(wparam) == IDOK) {
+            DWORD flags;
+            wchar_t host[256];
+
+            if (ctx == NULL) {
+                EndDialog(dialog, IDCANCEL);
+                return TRUE;
+            }
+
+            GetDlgItemTextW(dialog, IDC_DIALOG_SERVER, host, sizeof(host) / sizeof(host[0]));
+            if (host[0] == L'\0') {
+                MessageBoxW(dialog, L"Server host is required.", L"GW32TIME", MB_ICONWARNING);
+                return TRUE;
+            }
+
+            flags = read_flags_from_dialog(dialog);
+            if ((flags & FLAG_MASK_VALID) == 0) {
+                MessageBoxW(dialog, L"Choose at least one flag.", L"GW32TIME", MB_ICONWARNING);
+                return TRUE;
+            }
+
+            wcsncpy(ctx->host, host, (sizeof(ctx->host) / sizeof(ctx->host[0])) - 1);
+            ctx->host[(sizeof(ctx->host) / sizeof(ctx->host[0])) - 1] = L'\0';
+            ctx->flags = flags;
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+
+        if (LOWORD(wparam) == IDCANCEL) {
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+
+    default:
+        return FALSE;
+    }
+}
+
+static int show_server_edit_dialog(HWND owner, server_edit_ctx_t *ctx)
+{
+    return (int)DialogBoxParamW(
+        g_instance,
+        MAKEINTRESOURCEW(IDD_SERVER_EDIT),
+        owner,
+        server_edit_dialog_proc,
+        (LPARAM)ctx);
 }
 
 static void add_or_update_server(HWND dialog, int update)
 {
-    wchar_t host[256];
-    wchar_t flags_text[64];
-    DWORD flags = 0;
     int row;
-
-    GetDlgItemTextW(dialog, IDC_SERVER_EDIT, host, sizeof(host) / sizeof(host[0]));
-    GetDlgItemTextW(dialog, IDC_FLAGS_EDIT, flags_text, sizeof(flags_text) / sizeof(flags_text[0]));
-
-    if (host[0] == L'\0') {
-        MessageBoxW(dialog, L"Server host is required.", L"GW32TIME", MB_ICONWARNING);
-        return;
-    }
-    if (parse_flags(flags_text, &flags) != 0) {
-        MessageBoxW(
-            dialog,
-            L"Invalid flags. Use combinations of 0x1, 0x2, 0x4, 0x8, for example 0x9.",
-            L"GW32TIME",
-            MB_ICONWARNING);
-        return;
-    }
+    server_edit_ctx_t ctx;
 
     if (update) {
         row = selected_row(dialog);
@@ -502,9 +545,26 @@ static void add_or_update_server(HWND dialog, int update)
         row = g_row_count++;
     }
 
-    wcsncpy(g_rows[row].host, host, (sizeof(g_rows[row].host) / sizeof(g_rows[row].host[0])) - 1);
+    ZeroMemory(&ctx, sizeof(ctx));
+    ctx.row = row;
+    if (update) {
+        wcsncpy(ctx.host, g_rows[row].host, (sizeof(ctx.host) / sizeof(ctx.host[0])) - 1);
+        ctx.host[(sizeof(ctx.host) / sizeof(ctx.host[0])) - 1] = L'\0';
+        ctx.flags = g_rows[row].flags;
+    } else {
+        ctx.flags = 0x9;
+    }
+
+    if (show_server_edit_dialog(dialog, &ctx) != IDOK) {
+        if (!update) {
+            g_row_count--;
+        }
+        return;
+    }
+
+    wcsncpy(g_rows[row].host, ctx.host, (sizeof(g_rows[row].host) / sizeof(g_rows[row].host[0])) - 1);
     g_rows[row].host[(sizeof(g_rows[row].host) / sizeof(g_rows[row].host[0])) - 1] = L'\0';
-    g_rows[row].flags = flags;
+    g_rows[row].flags = ctx.flags;
     g_rows[row].has_probe = 0;
     g_rows[row].ip[0] = L'\0';
     g_rows[row].ptr[0] = L'\0';
@@ -661,19 +721,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     switch (message) {
     case WM_INITDIALOG:
         init_servers_table(dialog);
-        SetDlgItemTextW(dialog, IDC_FLAGS_EDIT, L"0x9");
         refresh_status(dialog);
         probe_all_servers(dialog);
         return TRUE;
-
-    case WM_NOTIFY:
-        if (((LPNMHDR)lparam)->idFrom == IDC_SERVERS_TABLE && ((LPNMHDR)lparam)->code == LVN_ITEMCHANGED) {
-            int row = selected_row(dialog);
-            if (row >= 0) {
-                select_row_to_edits(dialog, row);
-            }
-        }
-        return FALSE;
 
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
