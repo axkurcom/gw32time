@@ -19,6 +19,8 @@
 
 #define SERVER_MAX_ROWS NTP_MAX_PEERS
 #define FLAG_MASK_VALID 0x0f
+#define WM_APP_PROBE_ROW (WM_APP + 1)
+#define WM_APP_PROBE_DONE (WM_APP + 2)
 
 typedef struct {
     wchar_t host[256];
@@ -38,9 +40,13 @@ typedef struct {
 } server_edit_ctx_t;
 
 static HINSTANCE g_instance;
+static HWND g_main_dialog = NULL;
+static HANDLE g_probe_thread = NULL;
+static LONG g_probe_running = 0;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
 static int selected_row(HWND dialog);
+static void start_probe_all_async(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -570,6 +576,7 @@ static void add_or_update_server(HWND dialog, int update)
     g_rows[row].ptr[0] = L'\0';
 
     refresh_servers_table(dialog);
+    start_probe_all_async(dialog);
 }
 
 static void delete_server(HWND dialog)
@@ -673,45 +680,63 @@ static void apply_servers(HWND dialog)
     refresh_status(dialog);
 }
 
-static void probe_all_servers(HWND dialog)
+static DWORD WINAPI probe_all_thread_proc(LPVOID param)
 {
-    MSG msg;
-    HWND probe_button = GetDlgItem(dialog, IDC_PROBE_ALL);
-    wchar_t caption[64];
+    HWND dialog = (HWND)param;
     int i;
 
-    if (g_row_count <= 0) {
-        MessageBoxW(dialog, L"No servers to probe.", L"GW32TIME", MB_ICONWARNING);
+    for (i = 0; i < g_row_count; i++) {
+        probe_server_row(i);
+        PostMessageW(dialog, WM_APP_PROBE_ROW, (WPARAM)i, 0);
+    }
+    PostMessageW(dialog, WM_APP_PROBE_DONE, 0, 0);
+    return 0;
+}
+
+static void start_probe_all_async(HWND dialog)
+{
+    if (InterlockedCompareExchange(&g_probe_running, 1, 0) != 0) {
         return;
     }
 
-    EnableWindow(probe_button, FALSE);
+    if (g_row_count <= 0) {
+        InterlockedExchange(&g_probe_running, 0);
+        return;
+    }
+
+    EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), FALSE);
+    SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Probing...");
 
-    for (i = 0; i < g_row_count; i++) {
-        _snwprintf(caption, sizeof(caption) / sizeof(caption[0]), L"Probing %d/%d...", i + 1, g_row_count);
-        caption[(sizeof(caption) / sizeof(caption[0])) - 1] = L'\0';
-        SetWindowTextW(probe_button, caption);
-        UpdateWindow(dialog);
-
-        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-
-        probe_server_row(i);
-        server_row_to_table(GetDlgItem(dialog, IDC_SERVERS_TABLE), i);
+    g_probe_thread = CreateThread(NULL, 0, probe_all_thread_proc, dialog, 0, NULL);
+    if (g_probe_thread == NULL) {
+        InterlockedExchange(&g_probe_running, 0);
+        SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Probe all");
+        EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
+        EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
+        EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
+        EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), TRUE);
+        EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
+        MessageBoxW(dialog, L"Could not start background probe.", L"GW32TIME", MB_ICONERROR);
     }
+}
 
-    SetWindowTextW(probe_button, L"Probe all");
+static void finish_probe_all_async(HWND dialog)
+{
+    if (g_probe_thread != NULL) {
+        CloseHandle(g_probe_thread);
+        g_probe_thread = NULL;
+    }
+    InterlockedExchange(&g_probe_running, 0);
+    SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Probe all");
     EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), TRUE);
-    EnableWindow(probe_button, TRUE);
+    EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
 }
 
 static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
@@ -720,9 +745,20 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
 
     switch (message) {
     case WM_INITDIALOG:
+        g_main_dialog = dialog;
         init_servers_table(dialog);
         refresh_status(dialog);
-        probe_all_servers(dialog);
+        start_probe_all_async(dialog);
+        return TRUE;
+
+    case WM_APP_PROBE_ROW:
+        if ((int)wparam >= 0 && (int)wparam < g_row_count) {
+            server_row_to_table(GetDlgItem(dialog, IDC_SERVERS_TABLE), (int)wparam);
+        }
+        return TRUE;
+
+    case WM_APP_PROBE_DONE:
+        finish_probe_all_async(dialog);
         return TRUE;
 
     case WM_COMMAND:
@@ -755,10 +791,14 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             apply_servers(dialog);
             return TRUE;
         case IDC_PROBE_ALL:
-            probe_all_servers(dialog);
+            start_probe_all_async(dialog);
             return TRUE;
         case IDC_EXIT:
         case IDCANCEL:
+            if (g_probe_running != 0) {
+                MessageBoxW(dialog, L"Probe is still running in background.", L"GW32TIME", MB_ICONINFORMATION);
+                return TRUE;
+            }
             EndDialog(dialog, 0);
             return TRUE;
         default:
