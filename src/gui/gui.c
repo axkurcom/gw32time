@@ -4,6 +4,7 @@
 #include "gui.h"
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -43,14 +44,247 @@ static HINSTANCE g_instance;
 static HWND g_main_dialog = NULL;
 static HANDLE g_probe_thread = NULL;
 static LONG g_probe_running = 0;
+static int g_is_admin = 0;
+static HFONT g_bold_font = NULL;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
 static int selected_row(HWND dialog);
 static void start_probe_all_async(HWND dialog);
+static void update_admin_controls(HWND dialog);
+static int relaunch_elevated_gui(HWND dialog);
+static void layout_header_time(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
     SetDlgItemTextW(dialog, id, text != NULL && text[0] != L'\0' ? text : L"unknown");
+}
+
+static void format_local_time_text(wchar_t *out, size_t chars)
+{
+    SYSTEMTIME st;
+
+    GetLocalTime(&st);
+    _snwprintf(
+        out,
+        chars,
+        L"%04u-%02u-%02u %02u:%02u:%02u",
+        (unsigned)st.wYear,
+        (unsigned)st.wMonth,
+        (unsigned)st.wDay,
+        (unsigned)st.wHour,
+        (unsigned)st.wMinute,
+        (unsigned)st.wSecond);
+    out[chars - 1] = L'\0';
+}
+
+static int with_systemtime_privilege(BOOL enable)
+{
+    HANDLE token = NULL;
+    TOKEN_PRIVILEGES tp;
+    LUID luid;
+    BOOL ok = FALSE;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+        return -1;
+    }
+    if (!LookupPrivilegeValueW(NULL, SE_SYSTEMTIME_NAME, &luid)) {
+        CloseHandle(token);
+        return -1;
+    }
+
+    ZeroMemory(&tp, sizeof(tp));
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = enable ? SE_PRIVILEGE_ENABLED : 0;
+    ok = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
+    CloseHandle(token);
+    return ok ? 0 : -1;
+}
+
+static void refresh_datetime_block(HWND dialog)
+{
+    wchar_t current[64];
+    int is_admin = 0;
+
+    format_local_time_text(current, sizeof(current) / sizeof(current[0]));
+    set_text(dialog, IDC_CURRENT_TIME, current);
+    layout_header_time(dialog);
+
+    if (privilege_is_admin(&is_admin) == 0 && is_admin) {
+        g_is_admin = 1;
+    } else {
+        g_is_admin = 0;
+    }
+    update_admin_controls(dialog);
+}
+
+static void update_admin_controls(HWND dialog)
+{
+    EnableWindow(GetDlgItem(dialog, IDC_SET_TIME), TRUE);
+    if (g_probe_running == 0) {
+        EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), TRUE);
+    }
+}
+
+static int relaunch_elevated_gui(HWND dialog)
+{
+    wchar_t exe_path[MAX_PATH];
+    HINSTANCE rc;
+
+    if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
+        MessageBoxW(dialog, L"Could not locate executable path for elevation.", L"GW32TIME", MB_ICONERROR);
+        return -1;
+    }
+
+    rc = ShellExecuteW(dialog, L"runas", exe_path, L"gui", NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)rc <= 32) {
+        MessageBoxW(dialog, L"UAC elevation was not completed.", L"GW32TIME", MB_ICONWARNING);
+        return -1;
+    }
+
+    MessageBoxW(dialog, L"Opened elevated GW32TIME window.", L"GW32TIME", MB_ICONINFORMATION);
+    return 0;
+}
+
+static HFONT ensure_bold_font(void)
+{
+    LOGFONTW lf;
+    HFONT base_font;
+
+    if (g_bold_font != NULL) {
+        return g_bold_font;
+    }
+
+    base_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    if (base_font == NULL || GetObjectW(base_font, sizeof(lf), &lf) == 0) {
+        return NULL;
+    }
+    lf.lfWeight = FW_BOLD;
+    g_bold_font = CreateFontIndirectW(&lf);
+    return g_bold_font;
+}
+
+static void layout_header_time(HWND dialog)
+{
+    HWND header = GetDlgItem(dialog, IDC_HEADER_TEXT);
+    HWND current = GetDlgItem(dialog, IDC_CURRENT_TIME);
+    HFONT font = ensure_bold_font();
+    RECT client;
+    SIZE sz_header;
+    SIZE sz_time;
+    wchar_t header_text[128];
+    wchar_t time_text[64];
+    HDC dc;
+    HFONT old_font;
+    int same_line;
+    int x_time;
+
+    if (header == NULL || current == NULL) {
+        return;
+    }
+
+    GetWindowTextW(header, header_text, sizeof(header_text) / sizeof(header_text[0]));
+    GetWindowTextW(current, time_text, sizeof(time_text) / sizeof(time_text[0]));
+    GetClientRect(dialog, &client);
+
+    dc = GetDC(dialog);
+    if (dc == NULL) {
+        return;
+    }
+    old_font = NULL;
+    if (font != NULL) {
+        old_font = (HFONT)SelectObject(dc, font);
+    }
+    GetTextExtentPoint32W(dc, header_text, (int)wcslen(header_text), &sz_header);
+    GetTextExtentPoint32W(dc, time_text, (int)wcslen(time_text), &sz_time);
+    if (old_font != NULL) {
+        SelectObject(dc, old_font);
+    }
+    ReleaseDC(dialog, dc);
+
+    same_line = (10 + sz_header.cx + 16 + sz_time.cx + 10 <= client.right);
+    if (same_line) {
+        x_time = client.right - sz_time.cx - 10;
+        MoveWindow(header, 10, 10, 300, 12, TRUE);
+        MoveWindow(current, x_time, 10, sz_time.cx + 4, 12, TRUE);
+    } else {
+        x_time = client.right - sz_time.cx - 10;
+        MoveWindow(header, 10, 10, 300, 12, TRUE);
+        MoveWindow(current, x_time, 24, sz_time.cx + 4, 12, TRUE);
+    }
+}
+
+static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    (void)lparam;
+
+    switch (message) {
+    case WM_INITDIALOG: {
+        SYSTEMTIME st;
+        HFONT bold_font;
+
+        GetLocalTime(&st);
+        DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
+        DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), GDT_VALID, &st);
+
+        bold_font = ensure_bold_font();
+        if (bold_font != NULL) {
+            SendDlgItemMessageW(dialog, IDC_SET_DATE_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_CLOCK_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+        }
+        return TRUE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wparam) == IDOK) {
+            SYSTEMTIME date_part;
+            SYSTEMTIME time_part;
+            SYSTEMTIME merged;
+
+            if (DateTime_GetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), &date_part) != GDT_VALID ||
+                DateTime_GetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), &time_part) != GDT_VALID) {
+                MessageBoxW(dialog, L"Invalid date or time value.", L"GW32TIME", MB_ICONWARNING);
+                return TRUE;
+            }
+
+            ZeroMemory(&merged, sizeof(merged));
+            merged.wYear = date_part.wYear;
+            merged.wMonth = date_part.wMonth;
+            merged.wDay = date_part.wDay;
+            merged.wHour = time_part.wHour;
+            merged.wMinute = time_part.wMinute;
+            merged.wSecond = time_part.wSecond;
+            merged.wMilliseconds = 0;
+
+            if (with_systemtime_privilege(TRUE) != 0 || !SetLocalTime(&merged)) {
+                with_systemtime_privilege(FALSE);
+                MessageBoxW(dialog, L"Could not set local date/time.", L"GW32TIME", MB_ICONERROR);
+                return TRUE;
+            }
+            with_systemtime_privilege(FALSE);
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wparam) == IDCANCEL) {
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    default:
+        return FALSE;
+    }
+}
+
+static void set_local_datetime(HWND dialog)
+{
+    if (!g_is_admin) {
+        relaunch_elevated_gui(dialog);
+        return;
+    }
+
+    if (DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, 0) == IDOK) {
+        refresh_datetime_block(dialog);
+        MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
+    }
 }
 
 static void format_flags(DWORD flags, wchar_t *buf, size_t chars)
@@ -284,6 +518,7 @@ static void refresh_status(HWND dialog)
         set_text(dialog, IDC_POLL, L"unknown");
         g_row_count = 0;
         refresh_servers_table(dialog);
+        refresh_datetime_block(dialog);
         return;
     }
 
@@ -298,6 +533,7 @@ static void refresh_status(HWND dialog)
 
     load_servers_from_config(&config);
     refresh_servers_table(dialog);
+    refresh_datetime_block(dialog);
 }
 
 static void sync_now(HWND dialog)
@@ -613,7 +849,7 @@ static void apply_servers(HWND dialog)
         return;
     }
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        MessageBoxW(dialog, L"Applying servers requires administrator privileges.", L"GW32TIME", MB_ICONWARNING);
+        relaunch_elevated_gui(dialog);
         return;
     }
     if (w32time_read_config(&config) != 0) {
@@ -735,7 +971,7 @@ static void finish_probe_all_async(HWND dialog)
     EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
-    EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), TRUE);
+    EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), g_is_admin ? TRUE : FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
 }
 
@@ -747,9 +983,21 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     case WM_INITDIALOG:
         g_main_dialog = dialog;
         init_servers_table(dialog);
+        if (ensure_bold_font() != NULL) {
+            SendDlgItemMessageW(dialog, IDC_HEADER_TEXT, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_CURRENT_TIME, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
+        }
         refresh_status(dialog);
         start_probe_all_async(dialog);
+        SetTimer(dialog, 1, 1000, NULL);
         return TRUE;
+
+    case WM_TIMER:
+        if (wparam == 1) {
+            refresh_datetime_block(dialog);
+            return TRUE;
+        }
+        return FALSE;
 
     case WM_APP_PROBE_ROW:
         if ((int)wparam >= 0 && (int)wparam < g_row_count) {
@@ -765,6 +1013,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         switch (LOWORD(wparam)) {
         case IDC_REFRESH:
             refresh_status(dialog);
+            return TRUE;
+        case IDC_SET_TIME:
+            set_local_datetime(dialog);
             return TRUE;
         case IDC_SYNC:
             sync_now(dialog);
@@ -799,6 +1050,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
                 MessageBoxW(dialog, L"Probe is still running in background.", L"GW32TIME", MB_ICONINFORMATION);
                 return TRUE;
             }
+            KillTimer(dialog, 1);
             EndDialog(dialog, 0);
             return TRUE;
         default:
