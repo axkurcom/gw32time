@@ -138,7 +138,6 @@ static int relaunch_elevated_gui(HWND dialog)
 
     rc = ShellExecuteW(dialog, L"runas", exe_path, L"gui", NULL, SW_SHOWNORMAL);
     if ((INT_PTR)rc <= 32) {
-        MessageBoxW(dialog, L"UAC elevation was not completed.", L"GW32TIME", MB_ICONWARNING);
         return -1;
     }
 
