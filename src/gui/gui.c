@@ -998,6 +998,27 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         }
         return FALSE;
 
+    case WM_ACTIVATE:
+        if (LOWORD(wparam) != WA_INACTIVE) {
+            SetWindowPos(
+                dialog,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            SetWindowPos(
+                dialog,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+        return TRUE;
+
     case WM_APP_PROBE_ROW:
         if ((int)wparam >= 0 && (int)wparam < g_row_count) {
             server_row_to_table(GetDlgItem(dialog, IDC_SERVERS_TABLE), (int)wparam);
