@@ -22,6 +22,8 @@
 #define FLAG_MASK_VALID 0x0f
 #define WM_APP_PROBE_ROW (WM_APP + 1)
 #define WM_APP_PROBE_DONE (WM_APP + 2)
+#define IDM_BACKUP_CONFIG 50001
+#define IDM_RESTORE_CONFIG 50002
 
 typedef struct {
     wchar_t host[256];
@@ -542,7 +544,7 @@ static void sync_now(HWND dialog)
     w32tm_raw_result_t result;
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        MessageBoxW(dialog, L"Sync requires an elevated administrator token.", L"GW32TIME", MB_ICONWARNING);
+        relaunch_elevated_gui(dialog);
         return;
     }
 
@@ -619,11 +621,62 @@ static void restore_config(HWND dialog)
         return;
     }
 
-    if (MessageBoxW(dialog, L"Restore W32Time configuration from this backup?", L"GW32TIME", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+    if (config_file_read(path, &config) != 0) {
+        MessageBoxW(dialog, L"Could not read configuration backup.", L"GW32TIME", MB_ICONERROR);
         return;
     }
 
-    if (config_file_read(path, &config) != 0 || w32time_write_config(&config) != 0) {
+    {
+        w32time_config_t current;
+        wchar_t preview[1536];
+
+        ZeroMemory(&current, sizeof(current));
+        if (w32time_read_config(&current) == 0) {
+            _snwprintf(
+                preview,
+                sizeof(preview) / sizeof(preview[0]),
+                L"Restore W32Time configuration from this backup?\n\n"
+                L"Current -> Backup\n"
+                L"Type: %ls -> %ls\n"
+                L"NtpServer: %ls -> %ls\n"
+                L"SpecialPollInterval: %ls%lu -> %ls%lu\n"
+                L"NtpClientEnabled: %ls%lu -> %ls%lu\n"
+                L"MinPollInterval: %ls%lu -> %ls%lu\n"
+                L"MaxPollInterval: %ls%lu -> %ls%lu",
+                current.type[0] ? current.type : L"-",
+                config.type[0] ? config.type : L"-",
+                current.ntp_server[0] ? current.ntp_server : L"-",
+                config.ntp_server[0] ? config.ntp_server : L"-",
+                current.has_special_poll_interval ? L"" : L"(unset) ",
+                (unsigned long)current.special_poll_interval,
+                config.has_special_poll_interval ? L"" : L"(unset) ",
+                (unsigned long)config.special_poll_interval,
+                current.has_ntp_client_enabled ? L"" : L"(unset) ",
+                (unsigned long)current.ntp_client_enabled,
+                config.has_ntp_client_enabled ? L"" : L"(unset) ",
+                (unsigned long)config.ntp_client_enabled,
+                current.has_min_poll_interval ? L"" : L"(unset) ",
+                (unsigned long)current.min_poll_interval,
+                config.has_min_poll_interval ? L"" : L"(unset) ",
+                (unsigned long)config.min_poll_interval,
+                current.has_max_poll_interval ? L"" : L"(unset) ",
+                (unsigned long)current.max_poll_interval,
+                config.has_max_poll_interval ? L"" : L"(unset) ",
+                (unsigned long)config.max_poll_interval);
+            preview[(sizeof(preview) / sizeof(preview[0])) - 1] = L'\0';
+            if (MessageBoxW(dialog, preview, L"GW32TIME", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+                return;
+            }
+        } else if (MessageBoxW(dialog, L"Restore W32Time configuration from this backup?", L"GW32TIME", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+            return;
+        }
+    }
+
+    if (MessageBoxW(dialog, L"Continue restore and restart Windows Time service?", L"GW32TIME", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        return;
+    }
+
+    if (w32time_write_config(&config) != 0) {
         MessageBoxW(dialog, L"Could not restore configuration backup.", L"GW32TIME", MB_ICONERROR);
         return;
     }
@@ -636,39 +689,6 @@ static void restore_config(HWND dialog)
 
     MessageBoxW(dialog, L"Configuration backup was restored.", L"GW32TIME", MB_ICONINFORMATION);
     refresh_status(dialog);
-}
-
-static void test_server(HWND dialog)
-{
-    wchar_t message[512];
-    ntp_probe_result_t result;
-    int row = selected_row(dialog);
-
-    if (row < 0 || row >= g_row_count) {
-        MessageBoxW(dialog, L"Select a server row to test.", L"GW32TIME", MB_ICONWARNING);
-        return;
-    }
-
-    if (ntp_probe(g_rows[row].host, 3000, &result) != 0 || !result.ok) {
-        _snwprintf(
-            message,
-            sizeof(message) / sizeof(message[0]),
-            L"NTP probe failed: %ls",
-            result.error[0] ? result.error : L"unknown error");
-        message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
-        MessageBoxW(dialog, message, L"GW32TIME", MB_ICONERROR);
-        return;
-    }
-
-    _snwprintf(
-        message,
-        sizeof(message) / sizeof(message[0]),
-        L"NTP probe OK.\nRTT: %lu ms\nOffset: %.0f ms\nStratum: %d",
-        (unsigned long)result.rtt_ms,
-        result.offset_ms,
-        result.stratum);
-    message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
-    MessageBoxW(dialog, message, L"GW32TIME", MB_ICONINFORMATION);
 }
 
 static int selected_row(HWND dialog)
@@ -944,12 +964,12 @@ static void start_probe_all_async(HWND dialog)
     EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), FALSE);
-    SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Probing...");
+    SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Checking...");
 
     g_probe_thread = CreateThread(NULL, 0, probe_all_thread_proc, dialog, 0, NULL);
     if (g_probe_thread == NULL) {
         InterlockedExchange(&g_probe_running, 0);
-        SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Probe all");
+        SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
         EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
         EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
         EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
@@ -966,7 +986,7 @@ static void finish_probe_all_async(HWND dialog)
         g_probe_thread = NULL;
     }
     InterlockedExchange(&g_probe_running, 0);
-    SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Probe all");
+    SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
     EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
     EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
@@ -1040,15 +1060,28 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         case IDC_SYNC:
             sync_now(dialog);
             return TRUE;
-        case IDC_BACKUP:
-            backup_config(dialog);
+        case IDC_BACKUP_MENU: {
+            HMENU menu = CreatePopupMenu();
+            RECT rc;
+            POINT pt;
+            UINT selected;
+            if (menu == NULL) {
+                return TRUE;
+            }
+            AppendMenuW(menu, MF_STRING, IDM_BACKUP_CONFIG, L"Backup Config...");
+            AppendMenuW(menu, MF_STRING, IDM_RESTORE_CONFIG, L"Restore Config...");
+            GetWindowRect(GetDlgItem(dialog, IDC_BACKUP_MENU), &rc);
+            pt.x = rc.left;
+            pt.y = rc.bottom;
+            selected = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, dialog, NULL);
+            DestroyMenu(menu);
+            if (selected == IDM_BACKUP_CONFIG) {
+                backup_config(dialog);
+            } else if (selected == IDM_RESTORE_CONFIG) {
+                restore_config(dialog);
+            }
             return TRUE;
-        case IDC_RESTORE:
-            restore_config(dialog);
-            return TRUE;
-        case IDC_TEST:
-            test_server(dialog);
-            return TRUE;
+        }
         case IDC_ADD_SERVER:
             add_or_update_server(dialog, 0);
             return TRUE;
