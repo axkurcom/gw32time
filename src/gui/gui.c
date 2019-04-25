@@ -1051,9 +1051,6 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
 
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
-        case IDC_REFRESH:
-            refresh_status(dialog);
-            return TRUE;
         case IDC_SET_TIME:
             set_local_datetime(dialog);
             return TRUE;
