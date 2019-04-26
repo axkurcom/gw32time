@@ -5,6 +5,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,10 +21,14 @@
 
 #define SERVER_MAX_ROWS NTP_MAX_PEERS
 #define FLAG_MASK_VALID 0x0f
-#define WM_APP_PROBE_ROW (WM_APP + 1)
+#define WM_APP_PROBE_RESULT (WM_APP + 1)
 #define WM_APP_PROBE_DONE (WM_APP + 2)
 #define IDM_BACKUP_CONFIG 50001
 #define IDM_RESTORE_CONFIG 50002
+#define TIMER_CLOCK 1
+#define TIMER_REALTIME_CHECK 2
+#define REALTIME_MIN_SECONDS 1
+#define REALTIME_MAX_SECONDS 3600
 
 typedef struct {
     wchar_t host[256];
@@ -42,12 +47,30 @@ typedef struct {
     DWORD flags;
 } server_edit_ctx_t;
 
+typedef struct {
+    wchar_t host[256];
+    DWORD flags;
+    int has_probe;
+    int stratum;
+    DWORD ping_ms;
+    double offset_ms;
+    wchar_t ip[64];
+    wchar_t ptr[256];
+} probe_result_msg_t;
+
+typedef struct {
+    HWND dialog;
+    int count;
+    server_row_t rows[SERVER_MAX_ROWS];
+} probe_run_ctx_t;
+
 static HINSTANCE g_instance;
 static HWND g_main_dialog = NULL;
 static HANDLE g_probe_thread = NULL;
 static LONG g_probe_running = 0;
 static int g_is_admin = 0;
 static HFONT g_bold_font = NULL;
+static int g_realtime_seconds = 15;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
 static int selected_row(HWND dialog);
@@ -55,6 +78,10 @@ static void start_probe_all_async(HWND dialog);
 static void update_admin_controls(HWND dialog);
 static int relaunch_elevated_gui(HWND dialog);
 static void layout_header_time(HWND dialog);
+static void update_realtime_controls(HWND dialog);
+static void restart_realtime_timer(HWND dialog);
+static int parse_realtime_seconds(HWND dialog);
+static void apply_probe_result(const probe_result_msg_t *msg);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -77,6 +104,64 @@ static void format_local_time_text(wchar_t *out, size_t chars)
         (unsigned)st.wMinute,
         (unsigned)st.wSecond);
     out[chars - 1] = L'\0';
+}
+
+static int parse_realtime_seconds(HWND dialog)
+{
+    wchar_t text[32];
+    wchar_t *end = NULL;
+    long value;
+
+    GetDlgItemTextW(dialog, IDC_REALTIME_SECONDS, text, sizeof(text) / sizeof(text[0]));
+    if (text[0] == L'\0') {
+        return g_realtime_seconds;
+    }
+
+    value = wcstol(text, &end, 10);
+    if (end == text || *end != L'\0') {
+        return g_realtime_seconds;
+    }
+    if (value < REALTIME_MIN_SECONDS) {
+        value = REALTIME_MIN_SECONDS;
+    } else if (value > REALTIME_MAX_SECONDS) {
+        value = REALTIME_MAX_SECONDS;
+    }
+    return (int)value;
+}
+
+static void update_realtime_controls(HWND dialog)
+{
+    int enabled = (IsDlgButtonChecked(dialog, IDC_REALTIME_CHECK) == BST_CHECKED);
+    wchar_t unit[16];
+
+    ShowWindow(GetDlgItem(dialog, IDC_REALTIME_EVERY), enabled ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(dialog, IDC_REALTIME_SECONDS), enabled ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(dialog, IDC_REALTIME_SPIN), enabled ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(dialog, IDC_REALTIME_UNIT), enabled ? SW_SHOW : SW_HIDE);
+
+    if (!enabled) {
+        KillTimer(dialog, TIMER_REALTIME_CHECK);
+        return;
+    }
+
+    g_realtime_seconds = parse_realtime_seconds(dialog);
+    _snwprintf(unit, sizeof(unit) / sizeof(unit[0]), L"%ls", g_realtime_seconds == 1 ? L"second" : L"seconds");
+    unit[(sizeof(unit) / sizeof(unit[0])) - 1] = L'\0';
+    SetDlgItemTextW(dialog, IDC_REALTIME_UNIT, unit);
+    SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
+}
+
+static void restart_realtime_timer(HWND dialog)
+{
+    if (IsDlgButtonChecked(dialog, IDC_REALTIME_CHECK) != BST_CHECKED) {
+        KillTimer(dialog, TIMER_REALTIME_CHECK);
+        return;
+    }
+
+    g_realtime_seconds = parse_realtime_seconds(dialog);
+    SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
+    KillTimer(dialog, TIMER_REALTIME_CHECK);
+    SetTimer(dialog, TIMER_REALTIME_CHECK, (UINT)(g_realtime_seconds * 1000), NULL);
 }
 
 static int with_systemtime_privilege(BOOL enable)
@@ -389,6 +474,32 @@ static void refresh_servers_table(HWND dialog)
     }
 }
 
+static void apply_probe_result(const probe_result_msg_t *msg)
+{
+    int i;
+    HWND table;
+
+    if (msg == NULL || g_main_dialog == NULL) {
+        return;
+    }
+
+    for (i = 0; i < g_row_count; i++) {
+        if (_wcsicmp(g_rows[i].host, msg->host) == 0 && g_rows[i].flags == msg->flags) {
+            g_rows[i].has_probe = msg->has_probe;
+            g_rows[i].stratum = msg->stratum;
+            g_rows[i].ping_ms = msg->ping_ms;
+            g_rows[i].offset_ms = msg->offset_ms;
+            wcsncpy(g_rows[i].ip, msg->ip, (sizeof(g_rows[i].ip) / sizeof(g_rows[i].ip[0])) - 1);
+            g_rows[i].ip[(sizeof(g_rows[i].ip) / sizeof(g_rows[i].ip[0])) - 1] = L'\0';
+            wcsncpy(g_rows[i].ptr, msg->ptr, (sizeof(g_rows[i].ptr) / sizeof(g_rows[i].ptr[0])) - 1);
+            g_rows[i].ptr[(sizeof(g_rows[i].ptr) / sizeof(g_rows[i].ptr[0])) - 1] = L'\0';
+            table = GetDlgItem(g_main_dialog, IDC_SERVERS_TABLE);
+            server_row_to_table(table, i);
+            break;
+        }
+    }
+}
+
 static int resolve_ip_ptr(const wchar_t *host, wchar_t *ip, size_t ip_chars, wchar_t *ptr, size_t ptr_chars)
 {
     WSADATA wsa;
@@ -435,31 +546,6 @@ static int resolve_ip_ptr(const wchar_t *host, wchar_t *ip, size_t ip_chars, wch
     FreeAddrInfoW(resolved);
     WSACleanup();
     return 0;
-}
-
-static void probe_server_row(int index)
-{
-    ntp_probe_result_t result;
-
-    g_rows[index].has_probe = 0;
-    g_rows[index].ip[0] = L'\0';
-    g_rows[index].ptr[0] = L'\0';
-    if (resolve_ip_ptr(
-            g_rows[index].host,
-            g_rows[index].ip,
-            sizeof(g_rows[index].ip) / sizeof(g_rows[index].ip[0]),
-            g_rows[index].ptr,
-            sizeof(g_rows[index].ptr) / sizeof(g_rows[index].ptr[0])) != 0) {
-        g_rows[index].ip[0] = L'\0';
-        g_rows[index].ptr[0] = L'\0';
-    }
-
-    if (ntp_probe(g_rows[index].host, 3000, &result) == 0 && result.ok) {
-        g_rows[index].has_probe = 1;
-        g_rows[index].stratum = result.stratum;
-        g_rows[index].ping_ms = result.rtt_ms;
-        g_rows[index].offset_ms = result.offset_ms;
-    }
 }
 
 static void load_servers_from_config(const w32time_config_t *config)
@@ -937,19 +1023,66 @@ static void apply_servers(HWND dialog)
 
 static DWORD WINAPI probe_all_thread_proc(LPVOID param)
 {
-    HWND dialog = (HWND)param;
+    probe_run_ctx_t *ctx = (probe_run_ctx_t *)param;
     int i;
 
-    for (i = 0; i < g_row_count; i++) {
-        probe_server_row(i);
-        PostMessageW(dialog, WM_APP_PROBE_ROW, (WPARAM)i, 0);
+    if (ctx == NULL) {
+        return 0;
     }
-    PostMessageW(dialog, WM_APP_PROBE_DONE, 0, 0);
+
+    for (i = 0; i < ctx->count; i++) {
+        probe_result_msg_t *msg = (probe_result_msg_t *)malloc(sizeof(probe_result_msg_t));
+        if (msg == NULL) {
+            continue;
+        }
+
+        ZeroMemory(msg, sizeof(*msg));
+        wcsncpy(msg->host, ctx->rows[i].host, (sizeof(msg->host) / sizeof(msg->host[0])) - 1);
+        msg->host[(sizeof(msg->host) / sizeof(msg->host[0])) - 1] = L'\0';
+        msg->flags = ctx->rows[i].flags;
+
+        ctx->rows[i].has_probe = 0;
+        ctx->rows[i].ip[0] = L'\0';
+        ctx->rows[i].ptr[0] = L'\0';
+        if (resolve_ip_ptr(
+                ctx->rows[i].host,
+                ctx->rows[i].ip,
+                sizeof(ctx->rows[i].ip) / sizeof(ctx->rows[i].ip[0]),
+                ctx->rows[i].ptr,
+                sizeof(ctx->rows[i].ptr) / sizeof(ctx->rows[i].ptr[0])) != 0) {
+            ctx->rows[i].ip[0] = L'\0';
+            ctx->rows[i].ptr[0] = L'\0';
+        }
+
+        {
+            ntp_probe_result_t result;
+            if (ntp_probe(ctx->rows[i].host, 3000, &result) == 0 && result.ok) {
+                ctx->rows[i].has_probe = 1;
+                ctx->rows[i].stratum = result.stratum;
+                ctx->rows[i].ping_ms = result.rtt_ms;
+                ctx->rows[i].offset_ms = result.offset_ms;
+            }
+        }
+
+        msg->has_probe = ctx->rows[i].has_probe;
+        msg->stratum = ctx->rows[i].stratum;
+        msg->ping_ms = ctx->rows[i].ping_ms;
+        msg->offset_ms = ctx->rows[i].offset_ms;
+        wcsncpy(msg->ip, ctx->rows[i].ip, (sizeof(msg->ip) / sizeof(msg->ip[0])) - 1);
+        msg->ip[(sizeof(msg->ip) / sizeof(msg->ip[0])) - 1] = L'\0';
+        wcsncpy(msg->ptr, ctx->rows[i].ptr, (sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1);
+        msg->ptr[(sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1] = L'\0';
+        PostMessageW(ctx->dialog, WM_APP_PROBE_RESULT, 0, (LPARAM)msg);
+    }
+    PostMessageW(ctx->dialog, WM_APP_PROBE_DONE, 0, (LPARAM)ctx);
     return 0;
 }
 
 static void start_probe_all_async(HWND dialog)
 {
+    probe_run_ctx_t *ctx;
+    int i;
+
     if (InterlockedCompareExchange(&g_probe_running, 1, 0) != 0) {
         return;
     }
@@ -960,20 +1093,29 @@ static void start_probe_all_async(HWND dialog)
     }
 
     EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), FALSE);
-    EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), FALSE);
-    EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), FALSE);
-    EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), FALSE);
-    EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), FALSE);
     SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Checking...");
 
-    g_probe_thread = CreateThread(NULL, 0, probe_all_thread_proc, dialog, 0, NULL);
-    if (g_probe_thread == NULL) {
+    ctx = (probe_run_ctx_t *)malloc(sizeof(probe_run_ctx_t));
+    if (ctx == NULL) {
         InterlockedExchange(&g_probe_running, 0);
         SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
-        EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
-        EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
-        EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
-        EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), TRUE);
+        EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
+        MessageBoxW(dialog, L"Could not allocate probe context.", L"GW32TIME", MB_ICONERROR);
+        return;
+    }
+
+    ZeroMemory(ctx, sizeof(*ctx));
+    ctx->dialog = dialog;
+    ctx->count = g_row_count;
+    for (i = 0; i < g_row_count; i++) {
+        ctx->rows[i] = g_rows[i];
+    }
+
+    g_probe_thread = CreateThread(NULL, 0, probe_all_thread_proc, ctx, 0, NULL);
+    if (g_probe_thread == NULL) {
+        free(ctx);
+        InterlockedExchange(&g_probe_running, 0);
+        SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
         EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
         MessageBoxW(dialog, L"Could not start background probe.", L"GW32TIME", MB_ICONERROR);
     }
@@ -987,10 +1129,6 @@ static void finish_probe_all_async(HWND dialog)
     }
     InterlockedExchange(&g_probe_running, 0);
     SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
-    EnableWindow(GetDlgItem(dialog, IDC_DELETE_SERVER), TRUE);
-    EnableWindow(GetDlgItem(dialog, IDC_UPDATE_SERVER), TRUE);
-    EnableWindow(GetDlgItem(dialog, IDC_ADD_SERVER), TRUE);
-    EnableWindow(GetDlgItem(dialog, IDC_APPLY_SERVERS), g_is_admin ? TRUE : FALSE);
     EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
 }
 
@@ -1002,18 +1140,27 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     case WM_INITDIALOG:
         g_main_dialog = dialog;
         init_servers_table(dialog);
+        SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETRANGE32, REALTIME_MIN_SECONDS, REALTIME_MAX_SECONDS);
+        SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETBUDDY, (WPARAM)GetDlgItem(dialog, IDC_REALTIME_SECONDS), 0);
+        SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
+        CheckDlgButton(dialog, IDC_REALTIME_CHECK, BST_UNCHECKED);
+        update_realtime_controls(dialog);
         if (ensure_bold_font() != NULL) {
             SendDlgItemMessageW(dialog, IDC_HEADER_TEXT, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
             SendDlgItemMessageW(dialog, IDC_CURRENT_TIME, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
         }
         refresh_status(dialog);
         start_probe_all_async(dialog);
-        SetTimer(dialog, 1, 1000, NULL);
+        SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
         return TRUE;
 
     case WM_TIMER:
-        if (wparam == 1) {
+        if (wparam == TIMER_CLOCK) {
             refresh_datetime_block(dialog);
+            return TRUE;
+        }
+        if (wparam == TIMER_REALTIME_CHECK) {
+            start_probe_all_async(dialog);
             return TRUE;
         }
         return FALSE;
@@ -1039,13 +1186,18 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         }
         return TRUE;
 
-    case WM_APP_PROBE_ROW:
-        if ((int)wparam >= 0 && (int)wparam < g_row_count) {
-            server_row_to_table(GetDlgItem(dialog, IDC_SERVERS_TABLE), (int)wparam);
+    case WM_APP_PROBE_RESULT:
+        if (lparam != 0) {
+            probe_result_msg_t *msg = (probe_result_msg_t *)lparam;
+            apply_probe_result(msg);
+            free(msg);
         }
         return TRUE;
 
     case WM_APP_PROBE_DONE:
+        if (lparam != 0) {
+            free((probe_run_ctx_t *)lparam);
+        }
         finish_probe_all_async(dialog);
         return TRUE;
 
@@ -1056,6 +1208,13 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             return TRUE;
         case IDC_SYNC:
             sync_now(dialog);
+            return TRUE;
+        case IDC_REALTIME_CHECK:
+            update_realtime_controls(dialog);
+            restart_realtime_timer(dialog);
+            if (IsDlgButtonChecked(dialog, IDC_REALTIME_CHECK) == BST_CHECKED) {
+                start_probe_all_async(dialog);
+            }
             return TRUE;
         case IDC_BACKUP_MENU: {
             HMENU menu = CreatePopupMenu();
@@ -1100,10 +1259,21 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
                 MessageBoxW(dialog, L"Probe is still running in background.", L"GW32TIME", MB_ICONINFORMATION);
                 return TRUE;
             }
-            KillTimer(dialog, 1);
+            KillTimer(dialog, TIMER_CLOCK);
+            KillTimer(dialog, TIMER_REALTIME_CHECK);
             EndDialog(dialog, 0);
             return TRUE;
         default:
+            if (LOWORD(wparam) == IDC_REALTIME_SECONDS && HIWORD(wparam) == EN_CHANGE) {
+                update_realtime_controls(dialog);
+                restart_realtime_timer(dialog);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == IDC_REALTIME_SECONDS && HIWORD(wparam) == EN_KILLFOCUS) {
+                update_realtime_controls(dialog);
+                restart_realtime_timer(dialog);
+                return TRUE;
+            }
             return FALSE;
         }
     default:
@@ -1118,7 +1288,7 @@ int gui_launch(HINSTANCE instance)
 
     ZeroMemory(&icc, sizeof(icc));
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES;
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_UPDOWN_CLASS;
     InitCommonControlsEx(&icc);
 
     return (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_MAIN), NULL, main_dialog_proc, 0);
