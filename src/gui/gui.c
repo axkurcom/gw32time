@@ -71,6 +71,7 @@ static LONG g_probe_running = 0;
 static int g_is_admin = 0;
 static HFONT g_bold_font = NULL;
 static int g_realtime_seconds = 15;
+static int g_realtime_updating = 0;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
 static int selected_row(HWND dialog);
@@ -148,7 +149,9 @@ static void update_realtime_controls(HWND dialog)
     _snwprintf(unit, sizeof(unit) / sizeof(unit[0]), L"%ls", g_realtime_seconds == 1 ? L"second" : L"seconds");
     unit[(sizeof(unit) / sizeof(unit[0])) - 1] = L'\0';
     SetDlgItemTextW(dialog, IDC_REALTIME_UNIT, unit);
+    g_realtime_updating = 1;
     SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
+    g_realtime_updating = 0;
 }
 
 static void restart_realtime_timer(HWND dialog)
@@ -159,7 +162,9 @@ static void restart_realtime_timer(HWND dialog)
     }
 
     g_realtime_seconds = parse_realtime_seconds(dialog);
+    g_realtime_updating = 1;
     SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
+    g_realtime_updating = 0;
     KillTimer(dialog, TIMER_REALTIME_CHECK);
     SetTimer(dialog, TIMER_REALTIME_CHECK, (UINT)(g_realtime_seconds * 1000), NULL);
 }
@@ -1265,6 +1270,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             return TRUE;
         default:
             if (LOWORD(wparam) == IDC_REALTIME_SECONDS && HIWORD(wparam) == EN_CHANGE) {
+                if (g_realtime_updating) {
+                    return TRUE;
+                }
                 update_realtime_controls(dialog);
                 restart_realtime_timer(dialog);
                 return TRUE;
