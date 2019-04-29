@@ -1301,7 +1301,7 @@ int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc <= 1) {
         FreeConsole();
-        return gui_launch(GetModuleHandleW(NULL));
+        return gui_launch(GetModuleHandleW(NULL), 0);
     }
 
     if (arg_is(argv[1], L"--help") || arg_is(argv[1], L"-h")) {
@@ -1327,8 +1327,9 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"gui")) {
+        int set_time_only = has_arg(argc, argv, L"--set-time");
         FreeConsole();
-        return gui_launch(GetModuleHandleW(NULL));
+        return gui_launch(GetModuleHandleW(NULL), set_time_only);
     }
 
     if (arg_is(argv[1], L"runtime")) {

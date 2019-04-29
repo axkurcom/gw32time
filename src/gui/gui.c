@@ -69,6 +69,7 @@ static HWND g_main_dialog = NULL;
 static HANDLE g_probe_thread = NULL;
 static LONG g_probe_running = 0;
 static int g_is_admin = 0;
+static int g_set_time_only = 0;
 static HFONT g_bold_font = NULL;
 static int g_realtime_seconds = 15;
 static int g_realtime_updating = 0;
@@ -78,6 +79,7 @@ static int selected_row(HWND dialog);
 static void start_probe_all_async(HWND dialog);
 static void update_admin_controls(HWND dialog);
 static int relaunch_elevated_gui(HWND dialog);
+static int launch_elevated_set_time(HWND dialog);
 static void layout_header_time(HWND dialog);
 static void update_realtime_controls(HWND dialog);
 static void restart_realtime_timer(HWND dialog);
@@ -196,6 +198,7 @@ static int with_systemtime_privilege(BOOL enable)
 static void refresh_datetime_block(HWND dialog)
 {
     wchar_t current[64];
+    wchar_t uac[16];
     int is_admin = 0;
 
     format_local_time_text(current, sizeof(current) / sizeof(current[0]));
@@ -207,6 +210,9 @@ static void refresh_datetime_block(HWND dialog)
     } else {
         g_is_admin = 0;
     }
+    _snwprintf(uac, sizeof(uac) / sizeof(uac[0]), L"%ls", g_is_admin ? L"[UAC ✔]" : L"[UAC ✘]");
+    uac[(sizeof(uac) / sizeof(uac[0])) - 1] = L'\0';
+    set_text(dialog, IDC_UAC_STATUS, uac);
     update_admin_controls(dialog);
 }
 
@@ -237,6 +243,24 @@ static int relaunch_elevated_gui(HWND dialog)
     return 0;
 }
 
+static int launch_elevated_set_time(HWND dialog)
+{
+    wchar_t exe_path[MAX_PATH];
+    HINSTANCE rc;
+
+    if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
+        MessageBoxW(dialog, L"Could not locate executable path for elevation.", L"GW32TIME", MB_ICONERROR);
+        return -1;
+    }
+
+    rc = ShellExecuteW(dialog, L"runas", exe_path, L"gui --set-time", NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)rc <= 32) {
+        return -1;
+    }
+
+    return 0;
+}
+
 static HFONT ensure_bold_font(void)
 {
     LOGFONTW lf;
@@ -258,23 +282,27 @@ static HFONT ensure_bold_font(void)
 static void layout_header_time(HWND dialog)
 {
     HWND header = GetDlgItem(dialog, IDC_HEADER_TEXT);
+    HWND uac = GetDlgItem(dialog, IDC_UAC_STATUS);
     HWND current = GetDlgItem(dialog, IDC_CURRENT_TIME);
     HFONT font = ensure_bold_font();
     RECT client;
     SIZE sz_header;
+    SIZE sz_uac;
     SIZE sz_time;
     wchar_t header_text[128];
     wchar_t time_text[64];
+    wchar_t uac_text[16];
     HDC dc;
     HFONT old_font;
     int same_line;
     int x_time;
 
-    if (header == NULL || current == NULL) {
+    if (header == NULL || uac == NULL || current == NULL) {
         return;
     }
 
     GetWindowTextW(header, header_text, sizeof(header_text) / sizeof(header_text[0]));
+    GetWindowTextW(uac, uac_text, sizeof(uac_text) / sizeof(uac_text[0]));
     GetWindowTextW(current, time_text, sizeof(time_text) / sizeof(time_text[0]));
     GetClientRect(dialog, &client);
 
@@ -287,19 +315,22 @@ static void layout_header_time(HWND dialog)
         old_font = (HFONT)SelectObject(dc, font);
     }
     GetTextExtentPoint32W(dc, header_text, (int)wcslen(header_text), &sz_header);
+    GetTextExtentPoint32W(dc, uac_text, (int)wcslen(uac_text), &sz_uac);
     GetTextExtentPoint32W(dc, time_text, (int)wcslen(time_text), &sz_time);
     if (old_font != NULL) {
         SelectObject(dc, old_font);
     }
     ReleaseDC(dialog, dc);
 
-    same_line = (10 + sz_header.cx + 16 + sz_time.cx + 10 <= client.right);
+    same_line = (10 + sz_header.cx + 12 + sz_uac.cx + 16 + sz_time.cx + 10 <= client.right);
     if (same_line) {
         x_time = client.right - sz_time.cx - 10;
+        MoveWindow(uac, 10 + sz_header.cx + 12, 10, sz_uac.cx + 4, 12, TRUE);
         MoveWindow(header, 10, 10, 300, 12, TRUE);
         MoveWindow(current, x_time, 10, sz_time.cx + 4, 12, TRUE);
     } else {
         x_time = client.right - sz_time.cx - 10;
+        MoveWindow(uac, 10, 24, sz_uac.cx + 4, 12, TRUE);
         MoveWindow(header, 10, 10, 300, 12, TRUE);
         MoveWindow(current, x_time, 24, sz_time.cx + 4, 12, TRUE);
     }
@@ -317,6 +348,7 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
         GetLocalTime(&st);
         DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
         DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), GDT_VALID, &st);
+        SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
 
         bold_font = ensure_bold_font();
         if (bold_font != NULL) {
@@ -360,6 +392,23 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             return TRUE;
         }
         return FALSE;
+    case WM_TIMER:
+        if (wparam == TIMER_CLOCK) {
+            HWND focus = GetFocus();
+            HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
+            HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
+            if (focus != date_ctrl && focus != time_ctrl) {
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
+                DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
+            }
+            return TRUE;
+        }
+        return FALSE;
+    case WM_DESTROY:
+        KillTimer(dialog, TIMER_CLOCK);
+        return TRUE;
     default:
         return FALSE;
     }
@@ -368,7 +417,7 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
 static void set_local_datetime(HWND dialog)
 {
     if (!g_is_admin) {
-        relaunch_elevated_gui(dialog);
+        launch_elevated_set_time(dialog);
         return;
     }
 
@@ -1152,6 +1201,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         update_realtime_controls(dialog);
         if (ensure_bold_font() != NULL) {
             SendDlgItemMessageW(dialog, IDC_HEADER_TEXT, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_UAC_STATUS, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
             SendDlgItemMessageW(dialog, IDC_CURRENT_TIME, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
         }
         refresh_status(dialog);
@@ -1289,15 +1339,19 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     }
 }
 
-int gui_launch(HINSTANCE instance)
+int gui_launch(HINSTANCE instance, int set_time_only)
 {
     INITCOMMONCONTROLSEX icc;
     g_instance = instance;
+    g_set_time_only = set_time_only ? 1 : 0;
 
     ZeroMemory(&icc, sizeof(icc));
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_UPDOWN_CLASS;
     InitCommonControlsEx(&icc);
 
+    if (g_set_time_only) {
+        return (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), NULL, set_time_dialog_proc, 0);
+    }
     return (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_MAIN), NULL, main_dialog_proc, 0);
 }
