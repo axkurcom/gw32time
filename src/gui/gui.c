@@ -70,6 +70,7 @@ static HANDLE g_probe_thread = NULL;
 static LONG g_probe_running = 0;
 static int g_is_admin = 0;
 static int g_set_time_only = 0;
+static int g_open_set_time_on_start = 0;
 static HFONT g_bold_font = NULL;
 static int g_realtime_seconds = 15;
 static int g_realtime_updating = 0;
@@ -79,7 +80,7 @@ static int selected_row(HWND dialog);
 static void start_probe_all_async(HWND dialog);
 static void update_admin_controls(HWND dialog);
 static int relaunch_elevated_gui(HWND dialog);
-static int launch_elevated_set_time(HWND dialog);
+static int relaunch_elevated_main(HWND dialog, const wchar_t *args, int close_current);
 static void layout_header_time(HWND dialog);
 static void update_realtime_controls(HWND dialog);
 static void restart_realtime_timer(HWND dialog);
@@ -226,24 +227,10 @@ static void update_admin_controls(HWND dialog)
 
 static int relaunch_elevated_gui(HWND dialog)
 {
-    wchar_t exe_path[MAX_PATH];
-    HINSTANCE rc;
-
-    if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
-        MessageBoxW(dialog, L"Could not locate executable path for elevation.", L"GW32TIME", MB_ICONERROR);
-        return -1;
-    }
-
-    rc = ShellExecuteW(dialog, L"runas", exe_path, L"gui", NULL, SW_SHOWNORMAL);
-    if ((INT_PTR)rc <= 32) {
-        return -1;
-    }
-
-    MessageBoxW(dialog, L"Opened elevated GW32TIME window.", L"GW32TIME", MB_ICONINFORMATION);
-    return 0;
+    return relaunch_elevated_main(dialog, L"gui", 1);
 }
 
-static int launch_elevated_set_time(HWND dialog)
+static int relaunch_elevated_main(HWND dialog, const wchar_t *args, int close_current)
 {
     wchar_t exe_path[MAX_PATH];
     HINSTANCE rc;
@@ -253,11 +240,13 @@ static int launch_elevated_set_time(HWND dialog)
         return -1;
     }
 
-    rc = ShellExecuteW(dialog, L"runas", exe_path, L"gui --set-time", NULL, SW_SHOWNORMAL);
+    rc = ShellExecuteW(dialog, L"runas", exe_path, args, NULL, SW_SHOWNORMAL);
     if ((INT_PTR)rc <= 32) {
         return -1;
     }
-
+    if (close_current && dialog != NULL) {
+        EndDialog(dialog, 0);
+    }
     return 0;
 }
 
@@ -383,7 +372,12 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
 
             if (with_systemtime_privilege(TRUE) != 0 || !SetLocalTime(&merged)) {
                 with_systemtime_privilege(FALSE);
-                MessageBoxW(dialog, L"Could not set local date/time.", L"GW32TIME", MB_ICONERROR);
+                MessageBoxW(
+                    dialog,
+                    L"UAC elevation was not completed for this operation,\n"
+                    L"or this account is not allowed to change system time.",
+                    L"GW32TIME",
+                    MB_ICONWARNING);
                 return TRUE;
             }
             with_systemtime_privilege(FALSE);
@@ -417,7 +411,7 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
 static void set_local_datetime(HWND dialog)
 {
     if (!g_is_admin) {
-        launch_elevated_set_time(dialog);
+        relaunch_elevated_main(dialog, L"gui --open-set-time", 1);
         return;
     }
 
@@ -1205,6 +1199,10 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             SendDlgItemMessageW(dialog, IDC_CURRENT_TIME, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
         }
         refresh_status(dialog);
+        if (g_open_set_time_on_start) {
+            g_open_set_time_on_start = 0;
+            set_local_datetime(dialog);
+        }
         start_probe_all_async(dialog);
         SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
         return TRUE;
@@ -1339,11 +1337,12 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     }
 }
 
-int gui_launch(HINSTANCE instance, int set_time_only)
+int gui_launch(HINSTANCE instance, int set_time_only, int open_set_time_on_start)
 {
     INITCOMMONCONTROLSEX icc;
     g_instance = instance;
     g_set_time_only = set_time_only ? 1 : 0;
+    g_open_set_time_on_start = open_set_time_on_start ? 1 : 0;
 
     ZeroMemory(&icc, sizeof(icc));
     icc.dwSize = sizeof(icc);

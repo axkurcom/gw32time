@@ -3,6 +3,6 @@
 
 #include <windows.h>
 
-int gui_launch(HINSTANCE instance, int set_time_only);
+int gui_launch(HINSTANCE instance, int set_time_only, int open_set_time_on_start);
 
 #endif
