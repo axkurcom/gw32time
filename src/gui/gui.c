@@ -344,10 +344,13 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
     case WM_INITDIALOG: {
         SYSTEMTIME st;
         HFONT bold_font;
+        HWND time_ctrl;
 
         GetLocalTime(&st);
         DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
-        DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), GDT_VALID, &st);
+        time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
+        DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
+        DateTime_SetFormat(time_ctrl, L"HH':'mm':'ss");
         SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
 
         bold_font = ensure_bold_font();
@@ -394,15 +397,12 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
         return FALSE;
     case WM_TIMER:
         if (wparam == TIMER_CLOCK) {
-            HWND focus = GetFocus();
             HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
             HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
-            if (focus != date_ctrl && focus != time_ctrl) {
-                SYSTEMTIME st;
-                GetLocalTime(&st);
-                DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
-                DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
-            }
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
+            DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
             return TRUE;
         }
         return FALSE;
