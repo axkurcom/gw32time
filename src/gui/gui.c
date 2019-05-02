@@ -408,17 +408,25 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
     }
 }
 
-static void set_local_datetime(HWND dialog)
+static void set_local_datetime(HWND dialog, int allow_elevation)
 {
     if (!g_is_admin) {
+        if (!allow_elevation) {
+            MessageBoxW(
+                dialog,
+                L"Current elevated session does not have permission to change system time.",
+                L"GW32TIME",
+                MB_ICONWARNING);
+            return;
+        }
         relaunch_elevated_main(dialog, L"gui --open-set-time", 1);
         return;
     }
 
-    if (DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, 0) == IDOK) {
-        refresh_datetime_block(dialog);
-        MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
-    }
+        if (DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, 0) == IDOK) {
+            refresh_datetime_block(dialog);
+            MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
+        }
 }
 
 static void format_flags(DWORD flags, wchar_t *buf, size_t chars)
@@ -1201,7 +1209,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         refresh_status(dialog);
         if (g_open_set_time_on_start) {
             g_open_set_time_on_start = 0;
-            set_local_datetime(dialog);
+            set_local_datetime(dialog, 0);
         }
         start_probe_all_async(dialog);
         SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
@@ -1257,7 +1265,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
         case IDC_SET_TIME:
-            set_local_datetime(dialog);
+            set_local_datetime(dialog, 1);
             return TRUE;
         case IDC_SYNC:
             sync_now(dialog);
