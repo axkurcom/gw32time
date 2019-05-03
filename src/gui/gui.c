@@ -86,10 +86,34 @@ static void update_realtime_controls(HWND dialog);
 static void restart_realtime_timer(HWND dialog);
 static int parse_realtime_seconds(HWND dialog);
 static void apply_probe_result(const probe_result_msg_t *msg);
+static void bump_main_window_layer(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
     SetDlgItemTextW(dialog, id, text != NULL && text[0] != L'\0' ? text : L"unknown");
+}
+
+static void bump_main_window_layer(HWND dialog)
+{
+    if (dialog == NULL) {
+        return;
+    }
+    SetWindowPos(
+        dialog,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    SetWindowPos(
+        dialog,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
 static void format_local_time_text(wchar_t *out, size_t chars)
@@ -412,21 +436,17 @@ static void set_local_datetime(HWND dialog, int allow_elevation)
 {
     if (!g_is_admin) {
         if (!allow_elevation) {
-            MessageBoxW(
-                dialog,
-                L"Current elevated session does not have permission to change system time.",
-                L"GW32TIME",
-                MB_ICONWARNING);
             return;
         }
         relaunch_elevated_main(dialog, L"gui --open-set-time", 1);
         return;
     }
 
-        if (DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, 0) == IDOK) {
-            refresh_datetime_block(dialog);
-            MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
-        }
+    if (DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, 0) == IDOK) {
+        refresh_datetime_block(dialog);
+        MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
+    }
+    bump_main_window_layer(dialog);
 }
 
 static void format_flags(DWORD flags, wchar_t *buf, size_t chars)
@@ -1195,6 +1215,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     switch (message) {
     case WM_INITDIALOG:
         g_main_dialog = dialog;
+        bump_main_window_layer(dialog);
         init_servers_table(dialog);
         SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETRANGE32, REALTIME_MIN_SECONDS, REALTIME_MAX_SECONDS);
         SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETBUDDY, (WPARAM)GetDlgItem(dialog, IDC_REALTIME_SECONDS), 0);
@@ -1228,22 +1249,12 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
 
     case WM_ACTIVATE:
         if (LOWORD(wparam) != WA_INACTIVE) {
-            SetWindowPos(
-                dialog,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-            SetWindowPos(
-                dialog,
-                HWND_NOTOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            bump_main_window_layer(dialog);
+        }
+        return TRUE;
+    case WM_SHOWWINDOW:
+        if (wparam) {
+            bump_main_window_layer(dialog);
         }
         return TRUE;
 
