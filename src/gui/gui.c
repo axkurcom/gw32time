@@ -87,6 +87,7 @@ static void restart_realtime_timer(HWND dialog);
 static int parse_realtime_seconds(HWND dialog);
 static void apply_probe_result(const probe_result_msg_t *msg);
 static void bump_main_window_layer(HWND dialog);
+static int relaunch_plain_gui(HWND dialog, int close_current);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -252,6 +253,25 @@ static void update_admin_controls(HWND dialog)
 static int relaunch_elevated_gui(HWND dialog)
 {
     return relaunch_elevated_main(dialog, L"gui", 1);
+}
+
+static int relaunch_plain_gui(HWND dialog, int close_current)
+{
+    wchar_t exe_path[MAX_PATH];
+    HINSTANCE rc;
+
+    if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
+        return -1;
+    }
+
+    rc = ShellExecuteW(dialog, NULL, exe_path, L"gui", NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)rc <= 32) {
+        return -1;
+    }
+    if (close_current && dialog != NULL) {
+        EndDialog(dialog, 0);
+    }
+    return 0;
 }
 
 static int relaunch_elevated_main(HWND dialog, const wchar_t *args, int close_current)
@@ -1230,6 +1250,10 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         refresh_status(dialog);
         if (g_open_set_time_on_start) {
             g_open_set_time_on_start = 0;
+            if (!g_is_admin) {
+                relaunch_plain_gui(dialog, 1);
+                return TRUE;
+            }
             set_local_datetime(dialog, 0);
         }
         start_probe_all_async(dialog);
