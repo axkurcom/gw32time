@@ -18,6 +18,7 @@ SRC := \
 	src/core/privilege.c \
 	src/core/registry.c \
 	src/core/service.c \
+	src/core/time_set.c \
 	src/core/winver.c \
 	src/core/w32time.c \
 	src/core/w32tm.c

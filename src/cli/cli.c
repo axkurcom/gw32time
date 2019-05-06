@@ -14,6 +14,7 @@
 #include "../core/preset.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
+#include "../core/time_set.h"
 #include "../core/winver.h"
 #include "../core/w32time.h"
 #include "../core/w32tm.h"
@@ -347,6 +348,41 @@ static int print_diag(int raw)
         print_w32tm_block(L"w32tm /query /status", w32tm_query_status_raw);
         print_w32tm_block(L"w32tm /query /peers", w32tm_query_peers_raw);
         print_w32tm_configuration_if_allowed();
+    }
+    return 0;
+}
+
+static int run_internal_set_time(int argc, wchar_t **argv)
+{
+    SYSTEMTIME st;
+    unsigned short y, mo, d, h, mi, s;
+
+    if (argc < 4) {
+        return 2;
+    }
+
+    if (swscanf(argv[2], L"%hu-%hu-%hu", &y, &mo, &d) != 3) {
+        return 2;
+    }
+    if (swscanf(argv[3], L"%hu:%hu:%hu", &h, &mi, &s) != 3) {
+        return 2;
+    }
+
+    ZeroMemory(&st, sizeof(st));
+    st.wYear = y;
+    st.wMonth = mo;
+    st.wDay = d;
+    st.wHour = h;
+    st.wMinute = mi;
+    st.wSecond = s;
+    st.wMilliseconds = 0;
+
+    if (time_set_local(&st) != 0) {
+        DWORD err = GetLastError();
+        if (err == ERROR_PRIVILEGE_NOT_HELD || err == ERROR_ACCESS_DENIED) {
+            return 5;
+        }
+        return 1;
     }
     return 0;
 }
@@ -1299,9 +1335,13 @@ static int run_menu(void)
 
 int cli_dispatch(int argc, wchar_t **argv)
 {
+    if (argc >= 2 && arg_is(argv[1], L"__set-time")) {
+        return run_internal_set_time(argc, argv);
+    }
+
     if (argc <= 1) {
         FreeConsole();
-        return gui_launch(GetModuleHandleW(NULL), 0, 0);
+        return gui_launch(GetModuleHandleW(NULL));
     }
 
     if (arg_is(argv[1], L"--help") || arg_is(argv[1], L"-h")) {
@@ -1327,10 +1367,8 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
 
     if (arg_is(argv[1], L"gui")) {
-        int set_time_only = has_arg(argc, argv, L"--set-time");
-        int open_set_time_on_start = has_arg(argc, argv, L"--open-set-time");
         FreeConsole();
-        return gui_launch(GetModuleHandleW(NULL), set_time_only, open_set_time_on_start);
+        return gui_launch(GetModuleHandleW(NULL));
     }
 
     if (arg_is(argv[1], L"runtime")) {
