@@ -75,6 +75,7 @@ static HWND g_main_dialog = NULL;
 static HANDLE g_probe_thread = NULL;
 static LONG g_probe_running = 0;
 static int g_is_admin = 0;
+static int g_helper_uac_ok = 0;
 static HFONT g_bold_font = NULL;
 static int g_realtime_seconds = 15;
 static int g_realtime_updating = 0;
@@ -216,7 +217,7 @@ static void refresh_datetime_block(HWND dialog)
     } else {
         g_is_admin = 0;
     }
-    _snwprintf(uac, sizeof(uac) / sizeof(uac[0]), L"%ls", g_is_admin ? L"[UAC ✔]" : L"[UAC ✘]");
+    _snwprintf(uac, sizeof(uac) / sizeof(uac[0]), L"%ls", (g_is_admin || g_helper_uac_ok) ? L"[UAC ✔]" : L"[UAC ✘]");
     uac[(sizeof(uac) / sizeof(uac[0])) - 1] = L'\0';
     set_text(dialog, IDC_UAC_STATUS, uac);
     update_admin_controls(dialog);
@@ -278,6 +279,7 @@ static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
         return -1;
     }
     CloseHandle(sei.hProcess);
+    g_helper_uac_ok = 1;
     return (int)exit_code;
 }
 
