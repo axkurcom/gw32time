@@ -279,7 +279,9 @@ static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
         return -1;
     }
     CloseHandle(sei.hProcess);
-    g_helper_uac_ok = 1;
+    if (exit_code == 0) {
+        g_helper_uac_ok = 1;
+    }
     return (int)exit_code;
 }
 
