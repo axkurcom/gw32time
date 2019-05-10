@@ -387,6 +387,60 @@ static int run_internal_set_time(int argc, wchar_t **argv)
     return 0;
 }
 
+static int run_internal_sync_now(void)
+{
+    int is_admin = 0;
+    svc_state_t service_state = SVC_STATE_UNKNOWN;
+    w32tm_raw_result_t result;
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        return 5;
+    }
+    if (svc_query_state(L"w32time", &service_state) == 0 && service_state != SVC_STATE_RUNNING) {
+        if (svc_start(L"w32time") != 0) {
+            return 1;
+        }
+        Sleep(1200);
+    }
+    if (w32tm_resync_raw(&result) != 0 || result.exit_code != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int run_internal_apply_servers(int argc, wchar_t **argv)
+{
+    w32tm_raw_result_t result;
+
+    if (argc < 3 || argv[2] == NULL || argv[2][0] == L'\0') {
+        return 2;
+    }
+    if (w32time_write_manual_servers(argv[2]) != 0 ||
+        w32tm_config_manual_peers_raw(argv[2], &result) != 0 ||
+        result.exit_code != 0 ||
+        svc_restart(L"w32time") != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int run_internal_restore_config(int argc, wchar_t **argv)
+{
+    w32time_config_t config;
+    w32tm_raw_result_t result;
+
+    if (argc < 3 || argv[2] == NULL || argv[2][0] == L'\0') {
+        return 2;
+    }
+    if (config_file_read(argv[2], &config) != 0 || w32time_write_config(&config) != 0) {
+        return 1;
+    }
+    if (w32tm_config_update_raw(&result) != 0 || result.exit_code != 0 || svc_restart(L"w32time") != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int print_health(void)
 {
     health_t health;
@@ -1337,6 +1391,15 @@ int cli_dispatch(int argc, wchar_t **argv)
 {
     if (argc >= 2 && arg_is(argv[1], L"__set-time")) {
         return run_internal_set_time(argc, argv);
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__sync-now")) {
+        return run_internal_sync_now();
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__apply-servers")) {
+        return run_internal_apply_servers(argc, argv);
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__restore-config")) {
+        return run_internal_restore_config(argc, argv);
     }
 
     if (argc <= 1) {

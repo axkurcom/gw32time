@@ -84,8 +84,6 @@ static int g_row_count = 0;
 static int selected_row(HWND dialog);
 static void start_probe_all_async(HWND dialog);
 static void update_admin_controls(HWND dialog);
-static int relaunch_elevated_gui(HWND dialog);
-static int relaunch_elevated_main(HWND dialog, const wchar_t *args, int close_current);
 static void layout_header_time(HWND dialog);
 static void update_realtime_controls(HWND dialog);
 static void restart_realtime_timer(HWND dialog);
@@ -93,6 +91,7 @@ static int parse_realtime_seconds(HWND dialog);
 static void apply_probe_result(const probe_result_msg_t *msg);
 static void bump_main_window_layer(HWND dialog);
 static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st);
+static int run_elevated_helper(HWND dialog, const wchar_t *args);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -231,11 +230,6 @@ static void update_admin_controls(HWND dialog)
     }
 }
 
-static int relaunch_elevated_gui(HWND dialog)
-{
-    return relaunch_elevated_main(dialog, L"gui", 1);
-}
-
 static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
 {
     wchar_t exe_path[MAX_PATH];
@@ -285,24 +279,43 @@ static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
     return (int)exit_code;
 }
 
-static int relaunch_elevated_main(HWND dialog, const wchar_t *args, int close_current)
+static int run_elevated_helper(HWND dialog, const wchar_t *args)
 {
     wchar_t exe_path[MAX_PATH];
-    HINSTANCE rc;
+    SHELLEXECUTEINFOW sei;
+    DWORD exit_code = 1;
 
+    if (args == NULL || args[0] == L'\0') {
+        return -1;
+    }
     if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
-        MessageBoxW(dialog, L"Could not locate executable path for elevation.", L"GW32TIME", MB_ICONERROR);
         return -1;
     }
 
-    rc = ShellExecuteW(dialog, L"runas", exe_path, args, NULL, SW_SHOWNORMAL);
-    if ((INT_PTR)rc <= 32) {
+    ZeroMemory(&sei, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.hwnd = dialog;
+    sei.lpVerb = L"runas";
+    sei.lpFile = exe_path;
+    sei.lpParameters = args;
+    sei.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&sei)) {
         return -1;
     }
-    if (close_current && dialog != NULL) {
-        EndDialog(dialog, 0);
+    if (sei.hProcess == NULL) {
+        return -1;
     }
-    return 0;
+    WaitForSingleObject(sei.hProcess, INFINITE);
+    if (!GetExitCodeProcess(sei.hProcess, &exit_code)) {
+        CloseHandle(sei.hProcess);
+        return -1;
+    }
+    CloseHandle(sei.hProcess);
+    if (exit_code == 0) {
+        g_helper_uac_ok = 1;
+    }
+    return (int)exit_code;
 }
 
 static HFONT ensure_bold_font(void)
@@ -741,7 +754,12 @@ static void sync_now(HWND dialog)
     w32tm_raw_result_t result;
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        relaunch_elevated_gui(dialog);
+        if (run_elevated_helper(dialog, L"__sync-now") == 0) {
+            MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
+        } else {
+            MessageBoxW(dialog, L"Windows Time resync failed.", L"GW32TIME", MB_ICONERROR);
+        }
+        refresh_status(dialog);
         return;
     }
 
@@ -813,11 +831,6 @@ static void restore_config(HWND dialog)
         return;
     }
 
-    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        MessageBoxW(dialog, L"Restore requires an elevated administrator token.", L"GW32TIME", MB_ICONWARNING);
-        return;
-    }
-
     if (config_file_read(path, &config) != 0) {
         MessageBoxW(dialog, L"Could not read configuration backup.", L"GW32TIME", MB_ICONERROR);
         return;
@@ -873,15 +886,25 @@ static void restore_config(HWND dialog)
         return;
     }
 
-    if (w32time_write_config(&config) != 0) {
-        MessageBoxW(dialog, L"Could not restore configuration backup.", L"GW32TIME", MB_ICONERROR);
-        return;
-    }
-
-    if (w32tm_config_update_raw(&result) != 0 || result.exit_code != 0 || svc_restart(L"w32time") != 0) {
-        MessageBoxW(dialog, L"Configuration was restored, but service refresh failed.", L"GW32TIME", MB_ICONWARNING);
-        refresh_status(dialog);
-        return;
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        wchar_t params[MAX_PATH + 32];
+        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__restore-config \"%ls\"", path);
+        params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
+        if (run_elevated_helper(dialog, params) != 0) {
+            MessageBoxW(dialog, L"Configuration was restored, but service refresh failed.", L"GW32TIME", MB_ICONWARNING);
+            refresh_status(dialog);
+            return;
+        }
+    } else {
+        if (w32time_write_config(&config) != 0) {
+            MessageBoxW(dialog, L"Could not restore configuration backup.", L"GW32TIME", MB_ICONERROR);
+            return;
+        }
+        if (w32tm_config_update_raw(&result) != 0 || result.exit_code != 0 || svc_restart(L"w32time") != 0) {
+            MessageBoxW(dialog, L"Configuration was restored, but service refresh failed.", L"GW32TIME", MB_ICONWARNING);
+            refresh_status(dialog);
+            return;
+        }
     }
 
     MessageBoxW(dialog, L"Configuration backup was restored.", L"GW32TIME", MB_ICONINFORMATION);
@@ -1064,10 +1087,6 @@ static void apply_servers(HWND dialog)
         MessageBoxW(dialog, L"Add at least one server before apply.", L"GW32TIME", MB_ICONWARNING);
         return;
     }
-    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        relaunch_elevated_gui(dialog);
-        return;
-    }
     if (w32time_read_config(&config) != 0) {
         MessageBoxW(dialog, L"Could not read current W32Time configuration.", L"GW32TIME", MB_ICONERROR);
         return;
@@ -1120,12 +1139,22 @@ static void apply_servers(HWND dialog)
         return;
     }
 
-    if (w32time_write_manual_servers(peerlist) != 0 ||
-        w32tm_config_manual_peers_raw(peerlist, &result) != 0 ||
-        result.exit_code != 0 ||
-        svc_restart(L"w32time") != 0) {
-        MessageBoxW(dialog, L"Failed to apply server list.", L"GW32TIME", MB_ICONERROR);
-        return;
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        wchar_t params[1200];
+        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__apply-servers \"%ls\"", peerlist);
+        params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
+        if (run_elevated_helper(dialog, params) != 0) {
+            MessageBoxW(dialog, L"Failed to apply server list.", L"GW32TIME", MB_ICONERROR);
+            return;
+        }
+    } else {
+        if (w32time_write_manual_servers(peerlist) != 0 ||
+            w32tm_config_manual_peers_raw(peerlist, &result) != 0 ||
+            result.exit_code != 0 ||
+            svc_restart(L"w32time") != 0) {
+            MessageBoxW(dialog, L"Failed to apply server list.", L"GW32TIME", MB_ICONERROR);
+            return;
+        }
     }
 
     MessageBoxW(dialog, L"Server list applied.", L"GW32TIME", MB_ICONINFORMATION);
