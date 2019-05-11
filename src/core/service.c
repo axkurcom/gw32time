@@ -2,6 +2,12 @@
 
 #include <stdlib.h>
 
+#ifndef _SERVICE_DELAYED_AUTO_START_INFO_
+typedef struct _SERVICE_DELAYED_AUTO_START_INFO {
+    BOOL fDelayedAutostart;
+} SERVICE_DELAYED_AUTO_START_INFO, *LPSERVICE_DELAYED_AUTO_START_INFO;
+#endif
+
 static svc_state_t map_state(DWORD state)
 {
     switch (state) {
@@ -40,6 +46,30 @@ static svc_start_type_t map_start_type(DWORD start_type)
     default:
         return SVC_START_UNKNOWN;
     }
+}
+
+static int query_delayed_auto(SC_HANDLE service, int *out_delayed)
+{
+    SERVICE_DELAYED_AUTO_START_INFO info;
+    DWORD bytes_needed = 0;
+
+    if (out_delayed == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+    *out_delayed = 0;
+
+    ZeroMemory(&info, sizeof(info));
+    if (!QueryServiceConfig2W(
+            service,
+            SERVICE_CONFIG_DELAYED_AUTO_START_INFO,
+            (LPBYTE)&info,
+            sizeof(info),
+            &bytes_needed)) {
+        return -1;
+    }
+    *out_delayed = info.fDelayedAutostart ? 1 : 0;
+    return 0;
 }
 
 static SC_HANDLE open_service_handle(const wchar_t *name, DWORD manager_access, DWORD service_access, SC_HANDLE *scm)
@@ -152,6 +182,12 @@ int svc_query_start_type(const wchar_t *name, svc_start_type_t *out)
     }
 
     *out = map_start_type(config->dwStartType);
+    if (*out == SVC_START_AUTO) {
+        int delayed = 0;
+        if (query_delayed_auto(service, &delayed) == 0 && delayed) {
+            *out = SVC_START_AUTO_DELAYED;
+        }
+    }
     free(config);
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
@@ -233,6 +269,85 @@ int svc_restart(const wchar_t *name)
     return svc_start(name);
 }
 
+int svc_set_start_type(const wchar_t *name, svc_start_type_t start_type)
+{
+    SC_HANDLE scm;
+    SC_HANDLE service;
+    DWORD win_start = SERVICE_NO_CHANGE;
+    SERVICE_DELAYED_AUTO_START_INFO delayed;
+    int apply_delayed = 0;
+    DWORD last_error;
+
+    if (name == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    switch (start_type) {
+    case SVC_START_AUTO:
+        win_start = SERVICE_AUTO_START;
+        delayed.fDelayedAutostart = FALSE;
+        apply_delayed = 1;
+        break;
+    case SVC_START_AUTO_DELAYED:
+        win_start = SERVICE_AUTO_START;
+        delayed.fDelayedAutostart = TRUE;
+        apply_delayed = 1;
+        break;
+    case SVC_START_MANUAL:
+        win_start = SERVICE_DEMAND_START;
+        delayed.fDelayedAutostart = FALSE;
+        apply_delayed = 1;
+        break;
+    case SVC_START_DISABLED:
+        win_start = SERVICE_DISABLED;
+        delayed.fDelayedAutostart = FALSE;
+        apply_delayed = 1;
+        break;
+    default:
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    service = open_service_handle(name, SC_MANAGER_CONNECT, SERVICE_CHANGE_CONFIG, &scm);
+    if (service == NULL) {
+        return -1;
+    }
+
+    if (!ChangeServiceConfigW(
+            service,
+            SERVICE_NO_CHANGE,
+            win_start,
+            SERVICE_NO_CHANGE,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL)) {
+        last_error = GetLastError();
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        SetLastError(last_error);
+        return -1;
+    }
+
+    if (apply_delayed) {
+        if (!ChangeServiceConfig2W(service, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, (LPVOID)&delayed)) {
+            last_error = GetLastError();
+            CloseServiceHandle(service);
+            CloseServiceHandle(scm);
+            SetLastError(last_error);
+            return -1;
+        }
+    }
+
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return 0;
+}
+
 const wchar_t *svc_state_name(svc_state_t state)
 {
     switch (state) {
@@ -264,6 +379,8 @@ const wchar_t *svc_start_type_name(svc_start_type_t start_type)
         return L"System";
     case SVC_START_AUTO:
         return L"Automatic";
+    case SVC_START_AUTO_DELAYED:
+        return L"Automatic (Delayed)";
     case SVC_START_MANUAL:
         return L"Manual";
     case SVC_START_DISABLED:

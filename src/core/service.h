@@ -19,6 +19,7 @@ typedef enum {
     SVC_START_BOOT,
     SVC_START_SYSTEM,
     SVC_START_AUTO,
+    SVC_START_AUTO_DELAYED,
     SVC_START_MANUAL,
     SVC_START_DISABLED
 } svc_start_type_t;
@@ -28,6 +29,7 @@ int svc_query_start_type(const wchar_t *name, svc_start_type_t *out);
 int svc_start(const wchar_t *name);
 int svc_stop(const wchar_t *name);
 int svc_restart(const wchar_t *name);
+int svc_set_start_type(const wchar_t *name, svc_start_type_t start_type);
 
 const wchar_t *svc_state_name(svc_state_t state);
 const wchar_t *svc_start_type_name(svc_start_type_t start_type);

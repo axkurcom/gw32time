@@ -26,6 +26,13 @@
 #define WM_APP_PROBE_DONE (WM_APP + 2)
 #define IDM_BACKUP_CONFIG 50001
 #define IDM_RESTORE_CONFIG 50002
+#define IDM_SERVICE_START 50010
+#define IDM_SERVICE_STOP 50011
+#define IDM_SERVICE_RESTART 50012
+#define IDM_SERVICE_MODE_AUTO 50013
+#define IDM_SERVICE_MODE_MANUAL 50014
+#define IDM_SERVICE_MODE_DELAYED 50015
+#define IDM_SERVICE_MODE_DISABLED 50016
 #define TIMER_CLOCK 1
 #define TIMER_REALTIME_CHECK 2
 #define REALTIME_MIN_SECONDS 1
@@ -92,10 +99,16 @@ static void apply_probe_result(const probe_result_msg_t *msg);
 static void bump_main_window_layer(HWND dialog);
 static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st);
 static int run_elevated_helper(HWND dialog, const wchar_t *args);
+static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
     SetDlgItemTextW(dialog, id, text != NULL && text[0] != L'\0' ? text : L"unknown");
+}
+
+static int str_eq(const wchar_t *a, const wchar_t *b)
+{
+    return a != NULL && b != NULL && wcscmp(a, b) == 0;
 }
 
 static void bump_main_window_layer(HWND dialog)
@@ -262,6 +275,9 @@ static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
     sei.lpParameters = params;
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei)) {
+        if (GetLastError() == ERROR_CANCELLED) {
+            return -2;
+        }
         return -1;
     }
     if (sei.hProcess == NULL) {
@@ -301,6 +317,9 @@ static int run_elevated_helper(HWND dialog, const wchar_t *args)
     sei.lpParameters = args;
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei)) {
+        if (GetLastError() == ERROR_CANCELLED) {
+            return -2;
+        }
         return -1;
     }
     if (sei.hProcess == NULL) {
@@ -754,7 +773,11 @@ static void sync_now(HWND dialog)
     w32tm_raw_result_t result;
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        if (run_elevated_helper(dialog, L"__sync-now") == 0) {
+        int rc = run_elevated_helper(dialog, L"__sync-now");
+        if (rc == -2) {
+            return;
+        }
+        if (rc == 0) {
             MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
         } else {
             MessageBoxW(dialog, L"Windows Time resync failed.", L"GW32TIME", MB_ICONERROR);
@@ -779,6 +802,48 @@ static void sync_now(HWND dialog)
 
     MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
     refresh_status(dialog);
+}
+
+static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode)
+{
+    wchar_t params[128];
+    int is_admin = 0;
+
+    if (mode != NULL) {
+        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__svc %ls %ls", action, mode);
+    } else {
+        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__svc %ls", action);
+    }
+    params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
+
+    if (privilege_is_admin(&is_admin) == 0 && is_admin) {
+        if (str_eq(action, L"start")) {
+            return svc_start(L"w32time") == 0 ? 0 : 1;
+        }
+        if (str_eq(action, L"stop")) {
+            return svc_stop(L"w32time") == 0 ? 0 : 1;
+        }
+        if (str_eq(action, L"restart")) {
+            return svc_restart(L"w32time") == 0 ? 0 : 1;
+        }
+        if (str_eq(action, L"mode") && mode != NULL) {
+            if (str_eq(mode, L"auto")) {
+                return svc_set_start_type(L"w32time", SVC_START_AUTO) == 0 ? 0 : 1;
+            }
+            if (str_eq(mode, L"manual")) {
+                return svc_set_start_type(L"w32time", SVC_START_MANUAL) == 0 ? 0 : 1;
+            }
+            if (str_eq(mode, L"delayed")) {
+                return svc_set_start_type(L"w32time", SVC_START_AUTO_DELAYED) == 0 ? 0 : 1;
+            }
+            if (str_eq(mode, L"disabled")) {
+                return svc_set_start_type(L"w32time", SVC_START_DISABLED) == 0 ? 0 : 1;
+            }
+        }
+        return 1;
+    }
+
+    return run_elevated_helper(dialog, params);
 }
 
 static int choose_config_file(HWND dialog, wchar_t *path, DWORD chars, int save)
@@ -1367,6 +1432,75 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
                 backup_config(dialog);
             } else if (selected == IDM_RESTORE_CONFIG) {
                 restore_config(dialog);
+            }
+            return TRUE;
+        }
+        case IDC_SERVICE_MENU: {
+            HMENU menu = CreatePopupMenu();
+            HMENU mode_menu = CreatePopupMenu();
+            RECT rc;
+            POINT pt;
+            UINT selected;
+            if (menu == NULL || mode_menu == NULL) {
+                if (mode_menu != NULL) {
+                    DestroyMenu(mode_menu);
+                }
+                if (menu != NULL) {
+                    DestroyMenu(menu);
+                }
+                return TRUE;
+            }
+            AppendMenuW(menu, MF_STRING, IDM_SERVICE_START, L"Start");
+            AppendMenuW(menu, MF_STRING, IDM_SERVICE_STOP, L"Stop");
+            AppendMenuW(menu, MF_STRING, IDM_SERVICE_RESTART, L"Restart");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(mode_menu, MF_STRING, IDM_SERVICE_MODE_AUTO, L"Auto");
+            AppendMenuW(mode_menu, MF_STRING, IDM_SERVICE_MODE_MANUAL, L"Manual");
+            AppendMenuW(mode_menu, MF_STRING, IDM_SERVICE_MODE_DELAYED, L"Delayed");
+            AppendMenuW(mode_menu, MF_STRING, IDM_SERVICE_MODE_DISABLED, L"Disabled");
+            AppendMenuW(menu, MF_POPUP, (UINT_PTR)mode_menu, L"Mode");
+
+            GetWindowRect(GetDlgItem(dialog, IDC_SERVICE_MENU), &rc);
+            pt.x = rc.left;
+            pt.y = rc.bottom;
+            selected = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD, pt.x, pt.y, 0, dialog, NULL);
+            DestroyMenu(menu);
+
+            if (selected == IDM_SERVICE_START) {
+                if (run_service_action(dialog, L"start", NULL) != 0) {
+                    MessageBoxW(dialog, L"Service start failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
+            } else if (selected == IDM_SERVICE_STOP) {
+                if (run_service_action(dialog, L"stop", NULL) != 0) {
+                    MessageBoxW(dialog, L"Service stop failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
+            } else if (selected == IDM_SERVICE_RESTART) {
+                if (run_service_action(dialog, L"restart", NULL) != 0) {
+                    MessageBoxW(dialog, L"Service restart failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
+            } else if (selected == IDM_SERVICE_MODE_AUTO) {
+                if (run_service_action(dialog, L"mode", L"auto") != 0) {
+                    MessageBoxW(dialog, L"Service mode update failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
+            } else if (selected == IDM_SERVICE_MODE_MANUAL) {
+                if (run_service_action(dialog, L"mode", L"manual") != 0) {
+                    MessageBoxW(dialog, L"Service mode update failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
+            } else if (selected == IDM_SERVICE_MODE_DELAYED) {
+                if (run_service_action(dialog, L"mode", L"delayed") != 0) {
+                    MessageBoxW(dialog, L"Service mode update failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
+            } else if (selected == IDM_SERVICE_MODE_DISABLED) {
+                if (run_service_action(dialog, L"mode", L"disabled") != 0) {
+                    MessageBoxW(dialog, L"Service mode update failed.", L"GW32TIME", MB_ICONERROR);
+                }
+                refresh_status(dialog);
             }
             return TRUE;
         }

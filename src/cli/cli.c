@@ -441,6 +441,41 @@ static int run_internal_restore_config(int argc, wchar_t **argv)
     return 0;
 }
 
+static int run_internal_service_cmd(int argc, wchar_t **argv)
+{
+    if (argc < 3) {
+        return 2;
+    }
+    if (arg_is(argv[2], L"start")) {
+        return svc_start(L"w32time") == 0 ? 0 : 1;
+    }
+    if (arg_is(argv[2], L"stop")) {
+        return svc_stop(L"w32time") == 0 ? 0 : 1;
+    }
+    if (arg_is(argv[2], L"restart")) {
+        return svc_restart(L"w32time") == 0 ? 0 : 1;
+    }
+    if (arg_is(argv[2], L"mode")) {
+        if (argc < 4) {
+            return 2;
+        }
+        if (arg_is(argv[3], L"auto")) {
+            return svc_set_start_type(L"w32time", SVC_START_AUTO) == 0 ? 0 : 1;
+        }
+        if (arg_is(argv[3], L"manual")) {
+            return svc_set_start_type(L"w32time", SVC_START_MANUAL) == 0 ? 0 : 1;
+        }
+        if (arg_is(argv[3], L"delayed")) {
+            return svc_set_start_type(L"w32time", SVC_START_AUTO_DELAYED) == 0 ? 0 : 1;
+        }
+        if (arg_is(argv[3], L"disabled")) {
+            return svc_set_start_type(L"w32time", SVC_START_DISABLED) == 0 ? 0 : 1;
+        }
+        return 2;
+    }
+    return 2;
+}
+
 static int print_health(void)
 {
     health_t health;
@@ -1400,6 +1435,9 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
     if (argc >= 2 && arg_is(argv[1], L"__restore-config")) {
         return run_internal_restore_config(argc, argv);
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__svc")) {
+        return run_internal_service_cmd(argc, argv);
     }
 
     if (argc <= 1) {
