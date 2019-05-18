@@ -779,10 +779,8 @@ static void sync_now(HWND dialog)
         }
         if (rc == 0) {
             MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
-        } else {
-            MessageBoxW(dialog, L"Windows Time resync failed.", L"GW32TIME", MB_ICONERROR);
+            refresh_status(dialog);
         }
-        refresh_status(dialog);
         return;
     }
 
@@ -795,8 +793,6 @@ static void sync_now(HWND dialog)
     }
 
     if (w32tm_resync_raw(&result) != 0 || result.exit_code != 0) {
-        MessageBoxW(dialog, L"Windows Time resync failed.", L"GW32TIME", MB_ICONERROR);
-        refresh_status(dialog);
         return;
     }
 
