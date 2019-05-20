@@ -35,6 +35,7 @@
 #define IDM_SERVICE_MODE_DISABLED 50016
 #define TIMER_CLOCK 1
 #define TIMER_REALTIME_CHECK 2
+#define TIMER_SYNC_BURST 3
 #define REALTIME_MIN_SECONDS 1
 #define REALTIME_MAX_SECONDS 3600
 
@@ -86,6 +87,7 @@ static int g_helper_uac_ok = 0;
 static HFONT g_bold_font = NULL;
 static int g_realtime_seconds = 15;
 static int g_realtime_updating = 0;
+static int g_sync_burst_remaining = 0;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
 static int selected_row(HWND dialog);
@@ -100,6 +102,7 @@ static void bump_main_window_layer(HWND dialog);
 static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st);
 static int run_elevated_helper(HWND dialog, const wchar_t *args);
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode);
+static void trigger_sync_probe_burst(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -780,6 +783,7 @@ static void sync_now(HWND dialog)
         if (rc == 0) {
             MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
             refresh_status(dialog);
+            trigger_sync_probe_burst(dialog);
         }
         return;
     }
@@ -798,6 +802,15 @@ static void sync_now(HWND dialog)
 
     MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
     refresh_status(dialog);
+    trigger_sync_probe_burst(dialog);
+}
+
+static void trigger_sync_probe_burst(HWND dialog)
+{
+    start_probe_all_async(dialog);
+    g_sync_burst_remaining = 2;
+    KillTimer(dialog, TIMER_SYNC_BURST);
+    SetTimer(dialog, TIMER_SYNC_BURST, 1000, NULL);
 }
 
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode)
@@ -1366,6 +1379,17 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             start_probe_all_async(dialog);
             return TRUE;
         }
+        if (wparam == TIMER_SYNC_BURST) {
+            if (g_sync_burst_remaining <= 0) {
+                KillTimer(dialog, TIMER_SYNC_BURST);
+                return TRUE;
+            }
+            if (g_probe_running == 0) {
+                start_probe_all_async(dialog);
+                g_sync_burst_remaining--;
+            }
+            return TRUE;
+        }
         return FALSE;
 
     case WM_ACTIVATE:
@@ -1523,6 +1547,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             }
             KillTimer(dialog, TIMER_CLOCK);
             KillTimer(dialog, TIMER_REALTIME_CHECK);
+            KillTimer(dialog, TIMER_SYNC_BURST);
             EndDialog(dialog, 0);
             return TRUE;
         default:
