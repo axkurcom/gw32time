@@ -1418,6 +1418,17 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         finish_probe_all_async(dialog);
         return TRUE;
 
+    case WM_NOTIFY: {
+        LPNMHDR hdr = (LPNMHDR)lparam;
+        if (hdr != NULL && hdr->idFrom == IDC_SERVERS_TABLE && hdr->code == NM_CLICK) {
+            if (selected_row(dialog) >= 0) {
+                add_or_update_server(dialog, 1);
+                return TRUE;
+            }
+        }
+        return FALSE;
+    }
+
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
         case IDC_SET_TIME:
