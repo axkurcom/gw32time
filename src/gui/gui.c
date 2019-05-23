@@ -103,6 +103,7 @@ static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st);
 static int run_elevated_helper(HWND dialog, const wchar_t *args);
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode);
 static void trigger_sync_probe_burst(HWND dialog);
+static void refresh_service_runtime(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -236,6 +237,23 @@ static void refresh_datetime_block(HWND dialog)
     uac[(sizeof(uac) / sizeof(uac[0])) - 1] = L'\0';
     set_text(dialog, IDC_UAC_STATUS, uac);
     update_admin_controls(dialog);
+}
+
+static void refresh_service_runtime(HWND dialog)
+{
+    svc_state_t state = SVC_STATE_UNKNOWN;
+    svc_start_type_t start_type = SVC_START_UNKNOWN;
+
+    if (svc_query_state(L"w32time", &state) == 0) {
+        set_text(dialog, IDC_SERVICE, svc_state_name(state));
+    } else {
+        set_text(dialog, IDC_SERVICE, L"unknown");
+    }
+    if (svc_query_start_type(L"w32time", &start_type) == 0) {
+        set_text(dialog, IDC_START, svc_start_type_name(start_type));
+    } else {
+        set_text(dialog, IDC_START, L"unknown");
+    }
 }
 
 static void update_admin_controls(HWND dialog)
@@ -1373,6 +1391,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     case WM_TIMER:
         if (wparam == TIMER_CLOCK) {
             refresh_datetime_block(dialog);
+            refresh_service_runtime(dialog);
             return TRUE;
         }
         if (wparam == TIMER_REALTIME_CHECK) {
@@ -1498,16 +1517,19 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             DestroyMenu(menu);
 
             if (selected == IDM_SERVICE_START) {
+                set_text(dialog, IDC_SERVICE, L"Start pending");
                 if (run_service_action(dialog, L"start", NULL) != 0) {
                     MessageBoxW(dialog, L"Service start failed.", L"GW32TIME", MB_ICONERROR);
                 }
                 refresh_status(dialog);
             } else if (selected == IDM_SERVICE_STOP) {
+                set_text(dialog, IDC_SERVICE, L"Stop pending");
                 if (run_service_action(dialog, L"stop", NULL) != 0) {
                     MessageBoxW(dialog, L"Service stop failed.", L"GW32TIME", MB_ICONERROR);
                 }
                 refresh_status(dialog);
             } else if (selected == IDM_SERVICE_RESTART) {
+                set_text(dialog, IDC_SERVICE, L"Restart pending");
                 if (run_service_action(dialog, L"restart", NULL) != 0) {
                     MessageBoxW(dialog, L"Service restart failed.", L"GW32TIME", MB_ICONERROR);
                 }
