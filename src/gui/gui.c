@@ -115,6 +115,44 @@ static int str_eq(const wchar_t *a, const wchar_t *b)
     return a != NULL && b != NULL && wcscmp(a, b) == 0;
 }
 
+static int is_wspace(wchar_t ch)
+{
+    return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+}
+
+static int trim_host_inplace(wchar_t *text)
+{
+    size_t start = 0;
+    size_t end;
+    size_t len;
+    size_t out_len;
+
+    if (text == NULL) {
+        return 0;
+    }
+
+    len = wcslen(text);
+    while (start < len && is_wspace(text[start])) {
+        start++;
+    }
+    if (start == len) {
+        text[0] = L'\0';
+        return 0;
+    }
+
+    end = len;
+    while (end > start && is_wspace(text[end - 1])) {
+        end--;
+    }
+
+    out_len = end - start;
+    if (start > 0 && out_len > 0) {
+        memmove(text, text + start, out_len * sizeof(wchar_t));
+    }
+    text[out_len] = L'\0';
+    return 1;
+}
+
 static void bump_main_window_layer(HWND dialog)
 {
     if (dialog == NULL) {
@@ -727,8 +765,16 @@ static void load_servers_from_config(const w32time_config_t *config)
     }
 
     for (i = 0; i < peers.count && i < SERVER_MAX_ROWS; i++) {
+        wchar_t host[256];
+
+        wcsncpy(host, peers.peers[i].host, (sizeof(host) / sizeof(host[0])) - 1);
+        host[(sizeof(host) / sizeof(host[0])) - 1] = L'\0';
+        if (!trim_host_inplace(host)) {
+            continue;
+        }
+
         g_rows[g_row_count].host[0] = L'\0';
-        wcsncpy(g_rows[g_row_count].host, peers.peers[i].host, (sizeof(g_rows[g_row_count].host) / sizeof(g_rows[g_row_count].host[0])) - 1);
+        wcsncpy(g_rows[g_row_count].host, host, (sizeof(g_rows[g_row_count].host) / sizeof(g_rows[g_row_count].host[0])) - 1);
         g_rows[g_row_count].host[(sizeof(g_rows[g_row_count].host) / sizeof(g_rows[g_row_count].host[0])) - 1] = L'\0';
         g_rows[g_row_count].flags = peers.peers[i].flags;
         g_rows[g_row_count].has_probe = 0;
@@ -1060,7 +1106,7 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
             }
 
             GetDlgItemTextW(dialog, IDC_DIALOG_SERVER, host, sizeof(host) / sizeof(host[0]));
-            if (host[0] == L'\0') {
+            if (!trim_host_inplace(host)) {
                 MessageBoxW(dialog, L"Server host is required.", L"GW32TIME", MB_ICONWARNING);
                 return TRUE;
             }
@@ -1441,7 +1487,10 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     case WM_NOTIFY: {
         LPNMHDR hdr = (LPNMHDR)lparam;
         if (hdr != NULL && hdr->idFrom == IDC_SERVERS_TABLE && hdr->code == NM_CLICK) {
-            if (selected_row(dialog) >= 0) {
+            LPNMITEMACTIVATE act = (LPNMITEMACTIVATE)lparam;
+            HWND table = GetDlgItem(dialog, IDC_SERVERS_TABLE);
+            if (act != NULL && table != NULL && act->iItem >= 0) {
+                ListView_SetItemState(table, act->iItem, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                 add_or_update_server(dialog, 1);
                 return TRUE;
             }
