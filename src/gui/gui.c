@@ -85,7 +85,7 @@ static LONG g_probe_running = 0;
 static int g_is_admin = 0;
 static int g_helper_uac_ok = 0;
 static HFONT g_bold_font = NULL;
-static int g_realtime_seconds = 15;
+static int g_realtime_seconds = 2;
 static int g_realtime_updating = 0;
 static int g_sync_burst_remaining = 0;
 static server_row_t g_rows[SERVER_MAX_ROWS];
@@ -1376,8 +1376,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETRANGE32, REALTIME_MIN_SECONDS, REALTIME_MAX_SECONDS);
         SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETBUDDY, (WPARAM)GetDlgItem(dialog, IDC_REALTIME_SECONDS), 0);
         SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
-        CheckDlgButton(dialog, IDC_REALTIME_CHECK, BST_UNCHECKED);
+        CheckDlgButton(dialog, IDC_REALTIME_CHECK, BST_CHECKED);
         update_realtime_controls(dialog);
+        restart_realtime_timer(dialog);
         if (ensure_bold_font() != NULL) {
             SendDlgItemMessageW(dialog, IDC_HEADER_TEXT, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
             SendDlgItemMessageW(dialog, IDC_UAC_STATUS, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
