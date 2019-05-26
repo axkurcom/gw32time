@@ -90,6 +90,7 @@ static HFONT g_bold_font = NULL;
 static int g_realtime_seconds = 2;
 static int g_realtime_updating = 0;
 static int g_sync_burst_remaining = 0;
+static int g_poll_updating = 0;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
 static int selected_row(HWND dialog);
@@ -106,6 +107,7 @@ static int run_elevated_helper(HWND dialog, const wchar_t *args);
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode);
 static void trigger_sync_probe_burst(HWND dialog);
 static void refresh_service_runtime(HWND dialog);
+static void apply_poll_interval(HWND dialog);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -217,6 +219,27 @@ static int parse_realtime_seconds(HWND dialog)
         value = REALTIME_MAX_SECONDS;
     }
     return (int)value;
+}
+
+static DWORD parse_poll_seconds(HWND dialog, int *ok)
+{
+    wchar_t text[32];
+    wchar_t *end = NULL;
+    unsigned long value;
+
+    if (ok != NULL) {
+        *ok = 0;
+    }
+
+    GetDlgItemTextW(dialog, IDC_POLL_VALUE, text, sizeof(text) / sizeof(text[0]));
+    value = wcstoul(text, &end, 10);
+    if (end == text || *end != L'\0' || value == 0 || value > 0xffffffffUL) {
+        return 0;
+    }
+    if (ok != NULL) {
+        *ok = 1;
+    }
+    return (DWORD)value;
 }
 
 static void update_realtime_controls(HWND dialog)
@@ -826,6 +849,11 @@ static void refresh_status(HWND dialog)
         _snwprintf(poll, sizeof(poll) / sizeof(poll[0]), L"%lu sec", (unsigned long)config.special_poll_interval);
         poll[(sizeof(poll) / sizeof(poll[0])) - 1] = L'\0';
         set_text(dialog, IDC_POLL, poll);
+        if (!g_poll_updating) {
+            g_poll_updating = 1;
+            SetDlgItemInt(dialog, IDC_POLL_VALUE, (UINT)config.special_poll_interval, FALSE);
+            g_poll_updating = 0;
+        }
     } else {
         set_text(dialog, IDC_POLL, L"unknown");
     }
@@ -869,6 +897,44 @@ static void sync_now(HWND dialog)
     MessageBoxW(dialog, L"Windows Time resync was requested.", L"GW32TIME", MB_ICONINFORMATION);
     refresh_status(dialog);
     trigger_sync_probe_burst(dialog);
+}
+
+static void apply_poll_interval(HWND dialog)
+{
+    int ok = 0;
+    int is_admin = 0;
+    DWORD seconds = parse_poll_seconds(dialog, &ok);
+    w32tm_raw_result_t result;
+
+    if (!ok) {
+        MessageBoxW(dialog, L"Poll interval must be a positive integer.", L"GW32TIME", MB_ICONWARNING);
+        return;
+    }
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        wchar_t params[64];
+        int rc;
+        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__set-poll %lu", (unsigned long)seconds);
+        params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
+        rc = run_elevated_helper(dialog, params);
+        if (rc == -2) {
+            return;
+        }
+        if (rc != 0) {
+            MessageBoxW(dialog, L"Failed to apply poll interval.", L"GW32TIME", MB_ICONERROR);
+            return;
+        }
+    } else {
+        if (w32time_write_poll_interval(seconds) != 0 ||
+            w32tm_config_update_raw(&result) != 0 ||
+            result.exit_code != 0) {
+            MessageBoxW(dialog, L"Failed to apply poll interval.", L"GW32TIME", MB_ICONERROR);
+            return;
+        }
+    }
+
+    MessageBoxW(dialog, L"Poll interval updated.", L"GW32TIME", MB_ICONINFORMATION);
+    refresh_status(dialog);
 }
 
 static void trigger_sync_probe_burst(HWND dialog)
@@ -1477,6 +1543,8 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         g_main_dialog = dialog;
         bump_main_window_layer(dialog);
         init_servers_table(dialog);
+        SendDlgItemMessageW(dialog, IDC_POLL_SPIN, UDM_SETRANGE32, 1, 604800);
+        SendDlgItemMessageW(dialog, IDC_POLL_SPIN, UDM_SETBUDDY, (WPARAM)GetDlgItem(dialog, IDC_POLL_VALUE), 0);
         SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETRANGE32, REALTIME_MIN_SECONDS, REALTIME_MAX_SECONDS);
         SendDlgItemMessageW(dialog, IDC_REALTIME_SPIN, UDM_SETBUDDY, (WPARAM)GetDlgItem(dialog, IDC_REALTIME_SECONDS), 0);
         SetDlgItemInt(dialog, IDC_REALTIME_SECONDS, (UINT)g_realtime_seconds, FALSE);
@@ -1558,6 +1626,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
 
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
+        case IDC_POLL_APPLY:
+            apply_poll_interval(dialog);
+            return TRUE;
         case IDC_SET_TIME:
             set_local_datetime(dialog);
             return TRUE;
@@ -1698,6 +1769,12 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
                 }
                 update_realtime_controls(dialog);
                 restart_realtime_timer(dialog);
+                return TRUE;
+            }
+            if (LOWORD(wparam) == IDC_POLL_VALUE && HIWORD(wparam) == EN_CHANGE) {
+                if (g_poll_updating) {
+                    return TRUE;
+                }
                 return TRUE;
             }
             if (LOWORD(wparam) == IDC_REALTIME_SECONDS && HIWORD(wparam) == EN_KILLFOCUS) {

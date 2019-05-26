@@ -476,6 +476,32 @@ static int run_internal_service_cmd(int argc, wchar_t **argv)
     return 2;
 }
 
+static int run_internal_set_poll(int argc, wchar_t **argv)
+{
+    wchar_t *end = NULL;
+    unsigned long seconds_ul;
+    DWORD seconds;
+    w32tm_raw_result_t result;
+
+    if (argc < 3 || argv[2] == NULL || argv[2][0] == L'\0') {
+        return 2;
+    }
+
+    seconds_ul = wcstoul(argv[2], &end, 10);
+    if (end == argv[2] || *end != L'\0' || seconds_ul == 0 || seconds_ul > 0xffffffffUL) {
+        return 2;
+    }
+    seconds = (DWORD)seconds_ul;
+
+    if (w32time_write_poll_interval(seconds) != 0) {
+        return 1;
+    }
+    if (w32tm_config_update_raw(&result) != 0 || result.exit_code != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int print_health(void)
 {
     health_t health;
@@ -1438,6 +1464,9 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
     if (argc >= 2 && arg_is(argv[1], L"__svc")) {
         return run_internal_service_cmd(argc, argv);
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__set-poll")) {
+        return run_internal_set_poll(argc, argv);
     }
 
     if (argc <= 1) {
