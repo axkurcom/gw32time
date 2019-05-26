@@ -54,6 +54,8 @@ typedef struct {
     int row;
     wchar_t host[256];
     DWORD flags;
+    int allow_delete;
+    int delete_requested;
 } server_edit_ctx_t;
 
 typedef struct {
@@ -1092,10 +1094,54 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
         if (ctx != NULL) {
             SetDlgItemTextW(dialog, IDC_DIALOG_SERVER, ctx->host);
             write_flags_to_dialog(dialog, ctx->flags);
+            EnableWindow(GetDlgItem(dialog, IDC_DIALOG_DELETE), ctx->allow_delete ? TRUE : FALSE);
         }
         return TRUE;
 
     case WM_COMMAND:
+        if (LOWORD(wparam) == IDC_DIALOG_CHECK) {
+            wchar_t host[256];
+            ntp_probe_result_t result;
+            wchar_t message[512];
+
+            GetDlgItemTextW(dialog, IDC_DIALOG_SERVER, host, sizeof(host) / sizeof(host[0]));
+            if (!trim_host_inplace(host)) {
+                MessageBoxW(dialog, L"Server host is required.", L"GW32TIME", MB_ICONWARNING);
+                return TRUE;
+            }
+
+            if (ntp_probe(host, 3000, &result) != 0 || !result.ok) {
+                _snwprintf(
+                    message,
+                    sizeof(message) / sizeof(message[0]),
+                    L"NTP probe failed: %ls",
+                    result.error[0] ? result.error : L"unknown error");
+                message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+                MessageBoxW(dialog, message, L"GW32TIME", MB_ICONERROR);
+                return TRUE;
+            }
+
+            _snwprintf(
+                message,
+                sizeof(message) / sizeof(message[0]),
+                L"NTP probe OK.\nRTT: %lu ms\nOffset: %.0f ms\nStratum: %d",
+                (unsigned long)result.rtt_ms,
+                result.offset_ms,
+                result.stratum);
+            message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+            MessageBoxW(dialog, message, L"GW32TIME", MB_ICONINFORMATION);
+            return TRUE;
+        }
+
+        if (LOWORD(wparam) == IDC_DIALOG_DELETE) {
+            if (ctx != NULL && ctx->allow_delete) {
+                ctx->delete_requested = 1;
+                EndDialog(dialog, IDOK);
+                return TRUE;
+            }
+            return TRUE;
+        }
+
         if (LOWORD(wparam) == IDOK) {
             DWORD flags;
             wchar_t host[256];
@@ -1166,6 +1212,8 @@ static void add_or_update_server(HWND dialog, int update)
 
     ZeroMemory(&ctx, sizeof(ctx));
     ctx.row = row;
+    ctx.allow_delete = update ? 1 : 0;
+    ctx.delete_requested = 0;
     if (update) {
         wcsncpy(ctx.host, g_rows[row].host, (sizeof(ctx.host) / sizeof(ctx.host[0])) - 1);
         ctx.host[(sizeof(ctx.host) / sizeof(ctx.host[0])) - 1] = L'\0';
@@ -1178,6 +1226,16 @@ static void add_or_update_server(HWND dialog, int update)
         if (!update) {
             g_row_count--;
         }
+        return;
+    }
+
+    if (ctx.delete_requested && update) {
+        int i;
+        for (i = row; i + 1 < g_row_count; i++) {
+            g_rows[i] = g_rows[i + 1];
+        }
+        g_row_count--;
+        refresh_servers_table(dialog);
         return;
     }
 
