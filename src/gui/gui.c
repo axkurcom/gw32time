@@ -1626,6 +1626,15 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
 
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
+        case IDC_UAC_STATUS:
+            if (HIWORD(wparam) == STN_CLICKED) {
+                int rc = run_elevated_helper(dialog, L"__uac-ping");
+                if (rc == 0) {
+                    refresh_datetime_block(dialog);
+                }
+                return TRUE;
+            }
+            return FALSE;
         case IDC_POLL_APPLY:
             apply_poll_interval(dialog);
             return TRUE;

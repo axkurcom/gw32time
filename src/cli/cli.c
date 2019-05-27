@@ -502,6 +502,11 @@ static int run_internal_set_poll(int argc, wchar_t **argv)
     return 0;
 }
 
+static int run_internal_uac_ping(void)
+{
+    return 0;
+}
+
 static int print_health(void)
 {
     health_t health;
@@ -1467,6 +1472,9 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
     if (argc >= 2 && arg_is(argv[1], L"__set-poll")) {
         return run_internal_set_poll(argc, argv);
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__uac-ping")) {
+        return run_internal_uac_ping();
     }
 
     if (argc <= 1) {
