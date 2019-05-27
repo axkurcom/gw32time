@@ -815,7 +815,6 @@ static void refresh_status(HWND dialog)
     svc_start_type_t start_type = SVC_START_UNKNOWN;
     w32time_config_t config;
     health_t health;
-    wchar_t poll[64];
 
     if (diagnostics_evaluate_health(&health) == 0) {
         set_text(dialog, IDC_HEALTH, health_state_name(health.state));
@@ -845,17 +844,10 @@ static void refresh_status(HWND dialog)
     }
 
     set_text(dialog, IDC_TYPE, config.type);
-    if (config.has_special_poll_interval) {
-        _snwprintf(poll, sizeof(poll) / sizeof(poll[0]), L"%lu sec", (unsigned long)config.special_poll_interval);
-        poll[(sizeof(poll) / sizeof(poll[0])) - 1] = L'\0';
-        set_text(dialog, IDC_POLL, poll);
-        if (!g_poll_updating) {
-            g_poll_updating = 1;
-            SetDlgItemInt(dialog, IDC_POLL_VALUE, (UINT)config.special_poll_interval, FALSE);
-            g_poll_updating = 0;
-        }
-    } else {
-        set_text(dialog, IDC_POLL, L"unknown");
+    if (config.has_special_poll_interval && !g_poll_updating) {
+        g_poll_updating = 1;
+        SetDlgItemInt(dialog, IDC_POLL_VALUE, (UINT)config.special_poll_interval, FALSE);
+        g_poll_updating = 0;
     }
 
     load_servers_from_config(&config);
@@ -1555,6 +1547,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             SendDlgItemMessageW(dialog, IDC_HEADER_TEXT, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
             SendDlgItemMessageW(dialog, IDC_UAC_STATUS, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
             SendDlgItemMessageW(dialog, IDC_CURRENT_TIME, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_POLL_VALUE, WM_SETFONT, (WPARAM)g_bold_font, TRUE);
         }
         refresh_status(dialog);
         start_probe_all_async(dialog);
