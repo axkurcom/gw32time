@@ -62,6 +62,7 @@ typedef struct {
     SYSTEMTIME selected;
     int has_selected;
     int editing;
+    int edit_part; /* 0 none, 1 y,2 mo,3 d,4 h,5 mi,6 s */
 } set_time_dialog_ctx_t;
 
 typedef struct {
@@ -460,10 +461,12 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
         DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
         time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
         DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
+        DateTime_SetFormat(GetDlgItem(dialog, IDC_SET_DATE_VALUE), L"yyyy'-'MM'-'dd");
         DateTime_SetFormat(time_ctrl, L"HH':'mm':'ss");
         SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
         if (ctx != NULL) {
             ctx->editing = 0;
+            ctx->edit_part = 0;
         }
 
         bold_font = ensure_bold_font();
@@ -507,15 +510,80 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             return TRUE;
         }
         return FALSE;
+    case WM_NOTIFY: {
+        LPNMHDR hdr = (LPNMHDR)lparam;
+        if (ctx != NULL && hdr != NULL &&
+            (hdr->idFrom == IDC_SET_DATE_VALUE || hdr->idFrom == IDC_SET_CLOCK_VALUE)) {
+            if (hdr->code == DTN_DATETIMECHANGE) {
+                DWORD start = 0;
+                DWORD end = 0;
+                HWND edit_hwnd = NULL;
+                HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
+                HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
+                ctx->editing = 1;
+                ctx->edit_part = 0;
+                edit_hwnd = GetFocus();
+                if (edit_hwnd != NULL) {
+                    HWND parent = GetParent(edit_hwnd);
+                    if (parent != date_ctrl && parent != time_ctrl) {
+                        edit_hwnd = NULL;
+                    }
+                }
+                if (edit_hwnd != NULL && SendMessageW(edit_hwnd, EM_GETSEL, (WPARAM)&start, (LPARAM)&end) != 0) {
+                    if (hdr->idFrom == IDC_SET_DATE_VALUE) {
+                        if (start <= 3) {
+                            ctx->edit_part = 1;
+                        } else if (start >= 5 && start <= 6) {
+                            ctx->edit_part = 2;
+                        } else if (start >= 8 && start <= 9) {
+                            ctx->edit_part = 3;
+                        }
+                    } else if (hdr->idFrom == IDC_SET_CLOCK_VALUE) {
+                        if (start <= 1) {
+                            ctx->edit_part = 4;
+                        } else if (start >= 3 && start <= 4) {
+                            ctx->edit_part = 5;
+                        } else if (start >= 6 && start <= 7) {
+                            ctx->edit_part = 6;
+                        }
+                    }
+                }
+                return TRUE;
+            }
+        }
+        return FALSE;
+    }
     case WM_TIMER:
         if (wparam == TIMER_CLOCK) {
             HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
             HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
             SYSTEMTIME st;
-            if (ctx != NULL && ctx->editing) {
-                return TRUE;
-            }
+            SYSTEMTIME cur_date;
+            SYSTEMTIME cur_time;
+            int has_cur_date = (DateTime_GetSystemtime(date_ctrl, &cur_date) == GDT_VALID);
+            int has_cur_time = (DateTime_GetSystemtime(time_ctrl, &cur_time) == GDT_VALID);
+
             GetLocalTime(&st);
+            if (ctx != NULL && ctx->editing) {
+                if (has_cur_date) {
+                    if (ctx->edit_part == 1) {
+                        st.wYear = cur_date.wYear;
+                    } else if (ctx->edit_part == 2) {
+                        st.wMonth = cur_date.wMonth;
+                    } else if (ctx->edit_part == 3) {
+                        st.wDay = cur_date.wDay;
+                    }
+                }
+                if (has_cur_time) {
+                    if (ctx->edit_part == 4) {
+                        st.wHour = cur_time.wHour;
+                    } else if (ctx->edit_part == 5) {
+                        st.wMinute = cur_time.wMinute;
+                    } else if (ctx->edit_part == 6) {
+                        st.wSecond = cur_time.wSecond;
+                    }
+                }
+            }
             DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
             DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
             return TRUE;
