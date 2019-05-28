@@ -61,6 +61,7 @@ typedef struct {
 typedef struct {
     SYSTEMTIME selected;
     int has_selected;
+    int editing;
 } set_time_dialog_ctx_t;
 
 typedef struct {
@@ -102,7 +103,6 @@ static void restart_realtime_timer(HWND dialog);
 static int parse_realtime_seconds(HWND dialog);
 static void apply_probe_result(const probe_result_msg_t *msg);
 static void bump_main_window_layer(HWND dialog);
-static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st);
 static int run_elevated_helper(HWND dialog, const wchar_t *args);
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode);
 static void trigger_sync_probe_burst(HWND dialog);
@@ -327,58 +327,6 @@ static void update_admin_controls(HWND dialog)
     }
 }
 
-static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
-{
-    wchar_t exe_path[MAX_PATH];
-    wchar_t date_arg[32];
-    wchar_t time_arg[32];
-    wchar_t params[128];
-    SHELLEXECUTEINFOW sei;
-    DWORD exit_code = 1;
-
-    if (st == NULL) {
-        return -1;
-    }
-    if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
-        return -1;
-    }
-
-    _snwprintf(date_arg, sizeof(date_arg) / sizeof(date_arg[0]), L"%04u-%02u-%02u", st->wYear, st->wMonth, st->wDay);
-    date_arg[(sizeof(date_arg) / sizeof(date_arg[0])) - 1] = L'\0';
-    _snwprintf(time_arg, sizeof(time_arg) / sizeof(time_arg[0]), L"%02u:%02u:%02u", st->wHour, st->wMinute, st->wSecond);
-    time_arg[(sizeof(time_arg) / sizeof(time_arg[0])) - 1] = L'\0';
-    _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__set-time %ls %ls", date_arg, time_arg);
-    params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
-
-    ZeroMemory(&sei, sizeof(sei));
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.hwnd = dialog;
-    sei.lpVerb = L"runas";
-    sei.lpFile = exe_path;
-    sei.lpParameters = params;
-    sei.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&sei)) {
-        if (GetLastError() == ERROR_CANCELLED) {
-            return -2;
-        }
-        return -1;
-    }
-    if (sei.hProcess == NULL) {
-        return -1;
-    }
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    if (!GetExitCodeProcess(sei.hProcess, &exit_code)) {
-        CloseHandle(sei.hProcess);
-        return -1;
-    }
-    CloseHandle(sei.hProcess);
-    if (exit_code == 0) {
-        g_helper_uac_ok = 1;
-    }
-    return (int)exit_code;
-}
-
 static int run_elevated_helper(HWND dialog, const wchar_t *args)
 {
     wchar_t exe_path[MAX_PATH];
@@ -514,6 +462,9 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
         DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
         DateTime_SetFormat(time_ctrl, L"HH':'mm':'ss");
         SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
+        if (ctx != NULL) {
+            ctx->editing = 0;
+        }
 
         bold_font = ensure_bold_font();
         if (bold_font != NULL) {
@@ -523,6 +474,11 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
         return TRUE;
     }
     case WM_COMMAND:
+        if (LOWORD(wparam) == IDC_SET_DATE_VALUE || LOWORD(wparam) == IDC_SET_CLOCK_VALUE) {
+            if (ctx != NULL && (HIWORD(wparam) == EN_SETFOCUS || HIWORD(wparam) == EN_CHANGE)) {
+                ctx->editing = 1;
+            }
+        }
         if (LOWORD(wparam) == IDOK) {
             SYSTEMTIME date_part;
             SYSTEMTIME time_part;
@@ -556,6 +512,9 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
             HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
             SYSTEMTIME st;
+            if (ctx != NULL && ctx->editing) {
+                return TRUE;
+            }
             GetLocalTime(&st);
             DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
             DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
@@ -574,21 +533,22 @@ static void set_local_datetime(HWND dialog)
 {
     set_time_dialog_ctx_t ctx;
     int rc;
+    int is_admin = 0;
 
     ZeroMemory(&ctx, sizeof(ctx));
 
-    rc = (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, (LPARAM)&ctx);
-    if (rc != IDOK || !ctx.has_selected) {
-        bump_main_window_layer(dialog);
-        return;
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        rc = run_elevated_helper(dialog, L"__uac-ping");
+        if (rc != 0) {
+            bump_main_window_layer(dialog);
+            return;
+        }
+        g_helper_uac_ok = 1;
+        refresh_datetime_block(dialog);
     }
 
-    if (!g_is_admin) {
-        rc = run_elevated_set_time(dialog, &ctx.selected);
-        if (rc == 0) {
-            refresh_datetime_block(dialog);
-            MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
-        }
+    rc = (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, (LPARAM)&ctx);
+    if (rc != IDOK || !ctx.has_selected) {
         bump_main_window_layer(dialog);
         return;
     }
