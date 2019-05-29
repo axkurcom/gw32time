@@ -454,7 +454,11 @@ static void set_time_field(HWND dialog, int id, WORD value)
 {
     wchar_t text[16];
 
-    _snwprintf(text, sizeof(text) / sizeof(text[0]), L"%u", (unsigned)value);
+    if (id == IDC_SET_YEAR_VALUE) {
+        _snwprintf(text, sizeof(text) / sizeof(text[0]), L"%04u", (unsigned)value);
+    } else {
+        _snwprintf(text, sizeof(text) / sizeof(text[0]), L"%02u", (unsigned)value);
+    }
     text[(sizeof(text) / sizeof(text[0])) - 1] = L'\0';
     SetDlgItemTextW(dialog, id, text);
 }
@@ -468,6 +472,37 @@ static int read_time_field(HWND dialog, int id, WORD min_value, WORD max_value, 
         return -1;
     }
     *out = (WORD)value;
+    return 0;
+}
+
+static int normalize_time_field(HWND dialog, int id)
+{
+    WORD value;
+
+    if (id == IDC_SET_YEAR_VALUE) {
+        if (read_time_field(dialog, id, 1601, 9999, &value) != 0) {
+            return -1;
+        }
+    } else if (id == IDC_SET_MONTH_VALUE) {
+        if (read_time_field(dialog, id, 1, 12, &value) != 0) {
+            return -1;
+        }
+    } else if (id == IDC_SET_DAY_VALUE) {
+        if (read_time_field(dialog, id, 1, 31, &value) != 0) {
+            return -1;
+        }
+    } else if (id == IDC_SET_HOUR_VALUE) {
+        if (read_time_field(dialog, id, 0, 23, &value) != 0) {
+            return -1;
+        }
+    } else if (id == IDC_SET_MINUTE_VALUE || id == IDC_SET_SECOND_VALUE) {
+        if (read_time_field(dialog, id, 0, 59, &value) != 0) {
+            return -1;
+        }
+    } else {
+        return -1;
+    }
+    set_time_field(dialog, id, value);
     return 0;
 }
 
@@ -578,6 +613,9 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
                 ctx->second_locked = 1;
             }
         }
+        if (HIWORD(wparam) == EN_KILLFOCUS) {
+            normalize_time_field(dialog, LOWORD(wparam));
+        }
         if (LOWORD(wparam) == IDOK) {
             SYSTEMTIME selected;
 
@@ -585,6 +623,7 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
                 MessageBoxW(dialog, L"Invalid date or time value.", L"GW32TIME", MB_ICONWARNING);
                 return TRUE;
             }
+            set_time_dialog_values(dialog, &selected, ctx);
             if (ctx != NULL) {
                 ctx->selected = selected;
                 ctx->has_selected = 1;
