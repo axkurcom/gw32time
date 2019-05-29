@@ -61,11 +61,13 @@ typedef struct {
 typedef struct {
     SYSTEMTIME selected;
     int has_selected;
-    int date_locked;
-    int time_locked;
+    int year_locked;
+    int month_locked;
+    int day_locked;
+    int hour_locked;
+    int minute_locked;
+    int second_locked;
     int refreshing;
-    SYSTEMTIME date_value;
-    SYSTEMTIME time_value;
 } set_time_dialog_ctx_t;
 
 typedef struct {
@@ -448,6 +450,69 @@ static void layout_header_time(HWND dialog)
     }
 }
 
+static void set_time_field(HWND dialog, int id, WORD value)
+{
+    wchar_t text[16];
+
+    _snwprintf(text, sizeof(text) / sizeof(text[0]), L"%u", (unsigned)value);
+    text[(sizeof(text) / sizeof(text[0])) - 1] = L'\0';
+    SetDlgItemTextW(dialog, id, text);
+}
+
+static int read_time_field(HWND dialog, int id, WORD min_value, WORD max_value, WORD *out)
+{
+    BOOL translated = FALSE;
+    UINT value = GetDlgItemInt(dialog, id, &translated, FALSE);
+
+    if (!translated || value < min_value || value > max_value || out == NULL) {
+        return -1;
+    }
+    *out = (WORD)value;
+    return 0;
+}
+
+static void set_time_dialog_values(HWND dialog, const SYSTEMTIME *st, set_time_dialog_ctx_t *ctx)
+{
+    if (st == NULL) {
+        return;
+    }
+    if (ctx != NULL) {
+        ctx->refreshing = 1;
+    }
+    set_time_field(dialog, IDC_SET_YEAR_VALUE, st->wYear);
+    set_time_field(dialog, IDC_SET_MONTH_VALUE, st->wMonth);
+    set_time_field(dialog, IDC_SET_DAY_VALUE, st->wDay);
+    set_time_field(dialog, IDC_SET_HOUR_VALUE, st->wHour);
+    set_time_field(dialog, IDC_SET_MINUTE_VALUE, st->wMinute);
+    set_time_field(dialog, IDC_SET_SECOND_VALUE, st->wSecond);
+    if (ctx != NULL) {
+        ctx->refreshing = 0;
+    }
+}
+
+static int read_set_time_dialog_values(HWND dialog, SYSTEMTIME *out)
+{
+    FILETIME ft;
+
+    if (out == NULL) {
+        return -1;
+    }
+    ZeroMemory(out, sizeof(*out));
+    if (read_time_field(dialog, IDC_SET_YEAR_VALUE, 1601, 9999, &out->wYear) != 0 ||
+        read_time_field(dialog, IDC_SET_MONTH_VALUE, 1, 12, &out->wMonth) != 0 ||
+        read_time_field(dialog, IDC_SET_DAY_VALUE, 1, 31, &out->wDay) != 0 ||
+        read_time_field(dialog, IDC_SET_HOUR_VALUE, 0, 23, &out->wHour) != 0 ||
+        read_time_field(dialog, IDC_SET_MINUTE_VALUE, 0, 59, &out->wMinute) != 0 ||
+        read_time_field(dialog, IDC_SET_SECOND_VALUE, 0, 59, &out->wSecond) != 0) {
+        return -1;
+    }
+    out->wMilliseconds = 0;
+    if (!SystemTimeToFileTime(out, &ft)) {
+        return -1;
+    }
+    return 0;
+}
+
 static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
 {
     set_time_dialog_ctx_t *ctx = (set_time_dialog_ctx_t *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
@@ -456,29 +521,30 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
     case WM_INITDIALOG: {
         SYSTEMTIME st;
         HFONT bold_font;
-        HWND time_ctrl;
 
         SetWindowLongPtrW(dialog, GWLP_USERDATA, lparam);
         ctx = (set_time_dialog_ctx_t *)lparam;
         GetLocalTime(&st);
-        DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
-        time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
-        DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
-        DateTime_SetFormat(GetDlgItem(dialog, IDC_SET_DATE_VALUE), L"yyyy'-'MM'-'dd");
-        DateTime_SetFormat(time_ctrl, L"HH':'mm':'ss");
+        set_time_dialog_values(dialog, &st, ctx);
         SetTimer(dialog, TIMER_CLOCK, 1000, NULL);
         if (ctx != NULL) {
-            ctx->date_locked = 0;
-            ctx->time_locked = 0;
+            ctx->year_locked = 0;
+            ctx->month_locked = 0;
+            ctx->day_locked = 0;
+            ctx->hour_locked = 0;
+            ctx->minute_locked = 0;
+            ctx->second_locked = 0;
             ctx->refreshing = 0;
-            ctx->date_value = st;
-            ctx->time_value = st;
         }
 
         bold_font = ensure_bold_font();
         if (bold_font != NULL) {
-            SendDlgItemMessageW(dialog, IDC_SET_DATE_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
-            SendDlgItemMessageW(dialog, IDC_SET_CLOCK_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_YEAR_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_MONTH_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_DAY_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_HOUR_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_MINUTE_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_SECOND_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
         }
         return TRUE;
     }
@@ -487,37 +553,40 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             SYSTEMTIME st;
             GetLocalTime(&st);
             if (ctx != NULL) {
-                ctx->refreshing = 1;
+                ctx->year_locked = 0;
+                ctx->month_locked = 0;
+                ctx->day_locked = 0;
+                ctx->hour_locked = 0;
+                ctx->minute_locked = 0;
+                ctx->second_locked = 0;
             }
-            DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
-            DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), GDT_VALID, &st);
-            if (ctx != NULL) {
-                ctx->date_locked = 0;
-                ctx->time_locked = 0;
-                ctx->date_value = st;
-                ctx->time_value = st;
-                ctx->refreshing = 0;
-            }
+            set_time_dialog_values(dialog, &st, ctx);
             return TRUE;
         }
+        if (ctx != NULL && !ctx->refreshing && HIWORD(wparam) == EN_CHANGE) {
+            if (LOWORD(wparam) == IDC_SET_YEAR_VALUE) {
+                ctx->year_locked = 1;
+            } else if (LOWORD(wparam) == IDC_SET_MONTH_VALUE) {
+                ctx->month_locked = 1;
+            } else if (LOWORD(wparam) == IDC_SET_DAY_VALUE) {
+                ctx->day_locked = 1;
+            } else if (LOWORD(wparam) == IDC_SET_HOUR_VALUE) {
+                ctx->hour_locked = 1;
+            } else if (LOWORD(wparam) == IDC_SET_MINUTE_VALUE) {
+                ctx->minute_locked = 1;
+            } else if (LOWORD(wparam) == IDC_SET_SECOND_VALUE) {
+                ctx->second_locked = 1;
+            }
+        }
         if (LOWORD(wparam) == IDOK) {
-            SYSTEMTIME date_part;
-            SYSTEMTIME time_part;
+            SYSTEMTIME selected;
 
-            if (DateTime_GetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), &date_part) != GDT_VALID ||
-                DateTime_GetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), &time_part) != GDT_VALID) {
+            if (read_set_time_dialog_values(dialog, &selected) != 0) {
                 MessageBoxW(dialog, L"Invalid date or time value.", L"GW32TIME", MB_ICONWARNING);
                 return TRUE;
             }
             if (ctx != NULL) {
-                ZeroMemory(&ctx->selected, sizeof(ctx->selected));
-                ctx->selected.wYear = date_part.wYear;
-                ctx->selected.wMonth = date_part.wMonth;
-                ctx->selected.wDay = date_part.wDay;
-                ctx->selected.wHour = time_part.wHour;
-                ctx->selected.wMinute = time_part.wMinute;
-                ctx->selected.wSecond = time_part.wSecond;
-                ctx->selected.wMilliseconds = 0;
+                ctx->selected = selected;
                 ctx->has_selected = 1;
             }
             EndDialog(dialog, IDOK);
@@ -528,50 +597,32 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             return TRUE;
         }
         return FALSE;
-    case WM_NOTIFY: {
-        LPNMHDR hdr = (LPNMHDR)lparam;
-        if (ctx != NULL && hdr != NULL &&
-            (hdr->idFrom == IDC_SET_DATE_VALUE || hdr->idFrom == IDC_SET_CLOCK_VALUE)) {
-            if (hdr->code == DTN_DATETIMECHANGE) {
-                HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
-                HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
-                if (ctx->refreshing) {
-                    return TRUE;
-                }
-                if (hdr->idFrom == IDC_SET_DATE_VALUE &&
-                    DateTime_GetSystemtime(date_ctrl, &ctx->date_value) == GDT_VALID) {
-                    ctx->date_locked = 1;
-                } else if (hdr->idFrom == IDC_SET_CLOCK_VALUE &&
-                    DateTime_GetSystemtime(time_ctrl, &ctx->time_value) == GDT_VALID) {
-                    ctx->time_locked = 1;
-                }
-                return TRUE;
-            }
-        }
-        return FALSE;
-    }
     case WM_TIMER:
         if (wparam == TIMER_CLOCK) {
-            HWND date_ctrl = GetDlgItem(dialog, IDC_SET_DATE_VALUE);
-            HWND time_ctrl = GetDlgItem(dialog, IDC_SET_CLOCK_VALUE);
             SYSTEMTIME st;
-            SYSTEMTIME date_value;
-            SYSTEMTIME time_value;
 
             GetLocalTime(&st);
-            date_value = st;
-            time_value = st;
-            if (ctx != NULL && ctx->date_locked) {
-                date_value = ctx->date_value;
-            }
-            if (ctx != NULL && ctx->time_locked) {
-                time_value = ctx->time_value;
-            }
             if (ctx != NULL) {
                 ctx->refreshing = 1;
             }
-            DateTime_SetSystemtime(date_ctrl, GDT_VALID, &date_value);
-            DateTime_SetSystemtime(time_ctrl, GDT_VALID, &time_value);
+            if (ctx == NULL || !ctx->year_locked) {
+                set_time_field(dialog, IDC_SET_YEAR_VALUE, st.wYear);
+            }
+            if (ctx == NULL || !ctx->month_locked) {
+                set_time_field(dialog, IDC_SET_MONTH_VALUE, st.wMonth);
+            }
+            if (ctx == NULL || !ctx->day_locked) {
+                set_time_field(dialog, IDC_SET_DAY_VALUE, st.wDay);
+            }
+            if (ctx == NULL || !ctx->hour_locked) {
+                set_time_field(dialog, IDC_SET_HOUR_VALUE, st.wHour);
+            }
+            if (ctx == NULL || !ctx->minute_locked) {
+                set_time_field(dialog, IDC_SET_MINUTE_VALUE, st.wMinute);
+            }
+            if (ctx == NULL || !ctx->second_locked) {
+                set_time_field(dialog, IDC_SET_SECOND_VALUE, st.wSecond);
+            }
             if (ctx != NULL) {
                 ctx->refreshing = 0;
             }
