@@ -261,12 +261,35 @@ int svc_stop(const wchar_t *name)
 
 int svc_restart(const wchar_t *name)
 {
+    svc_state_t state;
+    int i;
+
     if (svc_stop(name) != 0) {
         return -1;
     }
 
-    Sleep(1200);
-    return svc_start(name);
+    for (i = 0; i < 40; i++) {
+        if (svc_query_state(name, &state) == 0 && state == SVC_STATE_STOPPED) {
+            break;
+        }
+        Sleep(250);
+    }
+
+    if (svc_start(name) != 0) {
+        if (svc_query_state(name, &state) != 0 || state != SVC_STATE_RUNNING) {
+            return -1;
+        }
+    }
+
+    for (i = 0; i < 40; i++) {
+        if (svc_query_state(name, &state) == 0 && state == SVC_STATE_RUNNING) {
+            return 0;
+        }
+        Sleep(250);
+    }
+
+    SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
+    return -1;
 }
 
 int svc_set_start_type(const wchar_t *name, svc_start_type_t start_type)
