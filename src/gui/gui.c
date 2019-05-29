@@ -705,16 +705,6 @@ static void set_local_datetime(HWND dialog)
 
     ZeroMemory(&ctx, sizeof(ctx));
 
-    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        rc = run_elevated_helper(dialog, L"__uac-ping");
-        if (rc != 0) {
-            bump_main_window_layer(dialog);
-            return;
-        }
-        g_helper_uac_ok = 1;
-        refresh_datetime_block(dialog);
-    }
-
     rc = (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, (LPARAM)&ctx);
     if (rc != IDOK || !ctx.has_selected) {
         bump_main_window_layer(dialog);
