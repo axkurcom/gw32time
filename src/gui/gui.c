@@ -483,6 +483,23 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
         return TRUE;
     }
     case WM_COMMAND:
+        if (LOWORD(wparam) == IDC_SET_TIME_REFRESH) {
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            if (ctx != NULL) {
+                ctx->refreshing = 1;
+            }
+            DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_DATE_VALUE), GDT_VALID, &st);
+            DateTime_SetSystemtime(GetDlgItem(dialog, IDC_SET_CLOCK_VALUE), GDT_VALID, &st);
+            if (ctx != NULL) {
+                ctx->date_locked = 0;
+                ctx->time_locked = 0;
+                ctx->date_value = st;
+                ctx->time_value = st;
+                ctx->refreshing = 0;
+            }
+            return TRUE;
+        }
         if (LOWORD(wparam) == IDOK) {
             SYSTEMTIME date_part;
             SYSTEMTIME time_part;
