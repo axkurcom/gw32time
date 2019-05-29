@@ -375,6 +375,27 @@ static int run_elevated_helper(HWND dialog, const wchar_t *args)
     return (int)exit_code;
 }
 
+static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
+{
+    wchar_t params[128];
+
+    if (st == NULL) {
+        return -1;
+    }
+    _snwprintf(
+        params,
+        sizeof(params) / sizeof(params[0]),
+        L"__set-time %04u-%02u-%02u %02u:%02u:%02u",
+        (unsigned)st->wYear,
+        (unsigned)st->wMonth,
+        (unsigned)st->wDay,
+        (unsigned)st->wHour,
+        (unsigned)st->wMinute,
+        (unsigned)st->wSecond);
+    params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
+    return run_elevated_helper(dialog, params);
+}
+
 static HFONT ensure_bold_font(void)
 {
     LOGFONTW lf;
@@ -700,7 +721,13 @@ static void set_local_datetime(HWND dialog)
         return;
     }
 
-    if (time_set_local(&ctx.selected) == 0) {
+    if (privilege_is_admin(&is_admin) == 0 && is_admin) {
+        rc = time_set_local(&ctx.selected);
+    } else {
+        rc = run_elevated_set_time(dialog, &ctx.selected);
+    }
+
+    if (rc == 0) {
         refresh_datetime_block(dialog);
         MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
     }
