@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
+#include <windows.h>
 
 #include "format.h"
 
@@ -504,6 +505,154 @@ static int run_internal_set_poll(int argc, wchar_t **argv)
 
 static int run_internal_uac_ping(void)
 {
+    return 0;
+}
+
+static wchar_t *helper_skip_space(wchar_t *p)
+{
+    while (p != NULL && (*p == L' ' || *p == L'\t')) {
+        p++;
+    }
+    return p;
+}
+
+static wchar_t *helper_next_arg(wchar_t **cursor)
+{
+    wchar_t *start;
+    wchar_t *p;
+
+    if (cursor == NULL || *cursor == NULL) {
+        return NULL;
+    }
+    p = helper_skip_space(*cursor);
+    if (*p == L'\0') {
+        *cursor = p;
+        return NULL;
+    }
+    if (*p == L'"') {
+        p++;
+        start = p;
+        while (*p != L'\0' && *p != L'"') {
+            p++;
+        }
+        if (*p == L'"') {
+            *p = L'\0';
+            p++;
+        }
+        *cursor = p;
+        return start;
+    }
+    start = p;
+    while (*p != L'\0' && *p != L' ' && *p != L'\t') {
+        p++;
+    }
+    if (*p != L'\0') {
+        *p = L'\0';
+        p++;
+    }
+    *cursor = p;
+    return start;
+}
+
+static int run_helper_command(wchar_t *command)
+{
+    wchar_t *cursor = command;
+    wchar_t *verb = helper_next_arg(&cursor);
+    wchar_t *argv_local[5];
+
+    if (verb == NULL) {
+        return 2;
+    }
+    if (arg_is(verb, L"__uac-ping")) {
+        return run_internal_uac_ping();
+    }
+    if (arg_is(verb, L"__sync-now")) {
+        return run_internal_sync_now();
+    }
+    if (arg_is(verb, L"__set-time")) {
+        argv_local[0] = L"gw32time";
+        argv_local[1] = verb;
+        argv_local[2] = helper_next_arg(&cursor);
+        argv_local[3] = helper_next_arg(&cursor);
+        return run_internal_set_time(4, argv_local);
+    }
+    if (arg_is(verb, L"__apply-servers")) {
+        argv_local[0] = L"gw32time";
+        argv_local[1] = verb;
+        argv_local[2] = helper_next_arg(&cursor);
+        return run_internal_apply_servers(3, argv_local);
+    }
+    if (arg_is(verb, L"__restore-config")) {
+        argv_local[0] = L"gw32time";
+        argv_local[1] = verb;
+        argv_local[2] = helper_next_arg(&cursor);
+        return run_internal_restore_config(3, argv_local);
+    }
+    if (arg_is(verb, L"__svc")) {
+        argv_local[0] = L"gw32time";
+        argv_local[1] = verb;
+        argv_local[2] = helper_next_arg(&cursor);
+        argv_local[3] = helper_next_arg(&cursor);
+        return run_internal_service_cmd(argv_local[3] != NULL ? 4 : 3, argv_local);
+    }
+    if (arg_is(verb, L"__set-poll")) {
+        argv_local[0] = L"gw32time";
+        argv_local[1] = verb;
+        argv_local[2] = helper_next_arg(&cursor);
+        return run_internal_set_poll(3, argv_local);
+    }
+    return 2;
+}
+
+static int run_internal_helper_server(int argc, wchar_t **argv)
+{
+    HANDLE pipe;
+    DWORD bytes_read;
+    DWORD bytes_written;
+    wchar_t command[2048];
+    DWORD exit_code;
+
+    if (argc < 3 || argv[2] == NULL || argv[2][0] == L'\0') {
+        return 2;
+    }
+
+    pipe = CreateNamedPipeW(
+        argv[2],
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        1,
+        sizeof(exit_code),
+        sizeof(command),
+        0,
+        NULL);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        return 1;
+    }
+
+    if (!ConnectNamedPipe(pipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
+        CloseHandle(pipe);
+        return 1;
+    }
+
+    for (;;) {
+        ZeroMemory(command, sizeof(command));
+        if (!ReadFile(pipe, command, sizeof(command) - sizeof(wchar_t), &bytes_read, NULL) || bytes_read == 0) {
+            break;
+        }
+        command[(sizeof(command) / sizeof(command[0])) - 1] = L'\0';
+        if (wcscmp(command, L"__exit") == 0) {
+            exit_code = 0;
+            WriteFile(pipe, &exit_code, sizeof(exit_code), &bytes_written, NULL);
+            break;
+        }
+        exit_code = (DWORD)run_helper_command(command);
+        if (!WriteFile(pipe, &exit_code, sizeof(exit_code), &bytes_written, NULL)) {
+            break;
+        }
+    }
+
+    DisconnectNamedPipe(pipe);
+    CloseHandle(pipe);
     return 0;
 }
 
@@ -1475,6 +1624,9 @@ int cli_dispatch(int argc, wchar_t **argv)
     }
     if (argc >= 2 && arg_is(argv[1], L"__uac-ping")) {
         return run_internal_uac_ping();
+    }
+    if (argc >= 2 && arg_is(argv[1], L"__helper")) {
+        return run_internal_helper_server(argc, argv);
     }
 
     if (argc <= 1) {

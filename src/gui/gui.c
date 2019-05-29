@@ -90,6 +90,8 @@ typedef struct {
 static HINSTANCE g_instance;
 static HWND g_main_dialog = NULL;
 static HANDLE g_probe_thread = NULL;
+static HANDLE g_helper_pipe = INVALID_HANDLE_VALUE;
+static HANDLE g_helper_process = NULL;
 static LONG g_probe_running = 0;
 static int g_is_admin = 0;
 static int g_helper_uac_ok = 0;
@@ -114,6 +116,7 @@ static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t 
 static void trigger_sync_probe_burst(HWND dialog);
 static void refresh_service_runtime(HWND dialog);
 static void apply_poll_interval(HWND dialog);
+static void close_elevated_helper(void);
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -333,18 +336,51 @@ static void update_admin_controls(HWND dialog)
     }
 }
 
-static int run_elevated_helper(HWND dialog, const wchar_t *args)
+static void close_elevated_helper(void)
+{
+    DWORD written;
+    DWORD read;
+    DWORD exit_code;
+    wchar_t command[2048];
+
+    if (g_helper_pipe != INVALID_HANDLE_VALUE) {
+        ZeroMemory(command, sizeof(command));
+        wcsncpy(command, L"__exit", (sizeof(command) / sizeof(command[0])) - 1);
+        WriteFile(g_helper_pipe, command, sizeof(command), &written, NULL);
+        ReadFile(g_helper_pipe, &exit_code, sizeof(exit_code), &read, NULL);
+        CloseHandle(g_helper_pipe);
+        g_helper_pipe = INVALID_HANDLE_VALUE;
+    }
+    if (g_helper_process != NULL) {
+        CloseHandle(g_helper_process);
+        g_helper_process = NULL;
+    }
+    g_helper_uac_ok = 0;
+}
+
+static int ensure_elevated_helper(HWND dialog)
 {
     wchar_t exe_path[MAX_PATH];
+    wchar_t pipe_name[128];
+    wchar_t params[192];
     SHELLEXECUTEINFOW sei;
-    DWORD exit_code = 1;
+    int i;
 
-    if (args == NULL || args[0] == L'\0') {
-        return -1;
+    if (g_helper_pipe != INVALID_HANDLE_VALUE) {
+        return 0;
     }
     if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
         return -1;
     }
+    _snwprintf(
+        pipe_name,
+        sizeof(pipe_name) / sizeof(pipe_name[0]),
+        L"\\\\.\\pipe\\gw32time-helper-%lu-%lu",
+        (unsigned long)GetCurrentProcessId(),
+        (unsigned long)GetTickCount());
+    pipe_name[(sizeof(pipe_name) / sizeof(pipe_name[0])) - 1] = L'\0';
+    _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__helper \"%ls\"", pipe_name);
+    params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
 
     ZeroMemory(&sei, sizeof(sei));
     sei.cbSize = sizeof(sei);
@@ -352,7 +388,7 @@ static int run_elevated_helper(HWND dialog, const wchar_t *args)
     sei.hwnd = dialog;
     sei.lpVerb = L"runas";
     sei.lpFile = exe_path;
-    sei.lpParameters = args;
+    sei.lpParameters = params;
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei)) {
         if (GetLastError() == ERROR_CANCELLED) {
@@ -363,14 +399,60 @@ static int run_elevated_helper(HWND dialog, const wchar_t *args)
     if (sei.hProcess == NULL) {
         return -1;
     }
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    if (!GetExitCodeProcess(sei.hProcess, &exit_code)) {
-        CloseHandle(sei.hProcess);
-        return -1;
+
+    for (i = 0; i < 80; i++) {
+        g_helper_pipe = CreateFileW(
+            pipe_name,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL);
+        if (g_helper_pipe != INVALID_HANDLE_VALUE) {
+            DWORD mode = PIPE_READMODE_MESSAGE;
+            SetNamedPipeHandleState(g_helper_pipe, &mode, NULL, NULL);
+            g_helper_process = sei.hProcess;
+            g_helper_uac_ok = 1;
+            return 0;
+        }
+        if (WaitForSingleObject(sei.hProcess, 100) == WAIT_OBJECT_0) {
+            break;
+        }
     }
     CloseHandle(sei.hProcess);
-    if (exit_code == 0) {
-        g_helper_uac_ok = 1;
+    return -1;
+}
+
+static int run_elevated_helper(HWND dialog, const wchar_t *args)
+{
+    wchar_t command[2048];
+    DWORD written;
+    DWORD read;
+    DWORD exit_code = 1;
+
+    if (args == NULL || args[0] == L'\0') {
+        return -1;
+    }
+    if (ensure_elevated_helper(dialog) != 0) {
+        return -1;
+    }
+
+    ZeroMemory(command, sizeof(command));
+    wcsncpy(command, args, (sizeof(command) / sizeof(command[0])) - 1);
+    if (!WriteFile(g_helper_pipe, command, sizeof(command), &written, NULL) ||
+        !ReadFile(g_helper_pipe, &exit_code, sizeof(exit_code), &read, NULL)) {
+        close_elevated_helper();
+        if (ensure_elevated_helper(dialog) != 0) {
+            return -1;
+        }
+        ZeroMemory(command, sizeof(command));
+        wcsncpy(command, args, (sizeof(command) / sizeof(command[0])) - 1);
+        if (!WriteFile(g_helper_pipe, command, sizeof(command), &written, NULL) ||
+            !ReadFile(g_helper_pipe, &exit_code, sizeof(exit_code), &read, NULL)) {
+            close_elevated_helper();
+            return -1;
+        }
     }
     return (int)exit_code;
 }
@@ -1886,6 +1968,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             KillTimer(dialog, TIMER_CLOCK);
             KillTimer(dialog, TIMER_REALTIME_CHECK);
             KillTimer(dialog, TIMER_SYNC_BURST);
+            close_elevated_helper();
             EndDialog(dialog, 0);
             return TRUE;
         default:
@@ -1910,6 +1993,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             }
             return FALSE;
         }
+    case WM_DESTROY:
+        close_elevated_helper();
+        return TRUE;
     default:
         return FALSE;
     }
