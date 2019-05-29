@@ -364,8 +364,13 @@ static int ensure_elevated_helper(HWND dialog)
     wchar_t pipe_name[128];
     wchar_t params[192];
     SHELLEXECUTEINFOW sei;
-    int i;
 
+    if (g_helper_pipe != INVALID_HANDLE_VALUE) {
+        if (g_helper_process == NULL || WaitForSingleObject(g_helper_process, 0) != WAIT_OBJECT_0) {
+            return 0;
+        }
+        close_elevated_helper();
+    }
     if (g_helper_pipe != INVALID_HANDLE_VALUE) {
         return 0;
     }
@@ -382,6 +387,19 @@ static int ensure_elevated_helper(HWND dialog)
     _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__helper \"%ls\"", pipe_name);
     params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
 
+    g_helper_pipe = CreateNamedPipeW(
+        pipe_name,
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        1,
+        sizeof(DWORD),
+        2048 * sizeof(wchar_t),
+        0,
+        NULL);
+    if (g_helper_pipe == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+
     ZeroMemory(&sei, sizeof(sei));
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
@@ -391,37 +409,28 @@ static int ensure_elevated_helper(HWND dialog)
     sei.lpParameters = params;
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei)) {
+        CloseHandle(g_helper_pipe);
+        g_helper_pipe = INVALID_HANDLE_VALUE;
         if (GetLastError() == ERROR_CANCELLED) {
             return -2;
         }
         return -1;
     }
     if (sei.hProcess == NULL) {
+        CloseHandle(g_helper_pipe);
+        g_helper_pipe = INVALID_HANDLE_VALUE;
         return -1;
     }
 
-    for (i = 0; i < 80; i++) {
-        g_helper_pipe = CreateFileW(
-            pipe_name,
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            NULL,
-            OPEN_EXISTING,
-            0,
-            NULL);
-        if (g_helper_pipe != INVALID_HANDLE_VALUE) {
-            DWORD mode = PIPE_READMODE_MESSAGE;
-            SetNamedPipeHandleState(g_helper_pipe, &mode, NULL, NULL);
-            g_helper_process = sei.hProcess;
-            g_helper_uac_ok = 1;
-            return 0;
-        }
-        if (WaitForSingleObject(sei.hProcess, 100) == WAIT_OBJECT_0) {
-            break;
-        }
+    if (!ConnectNamedPipe(g_helper_pipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
+        CloseHandle(g_helper_pipe);
+        g_helper_pipe = INVALID_HANDLE_VALUE;
+        CloseHandle(sei.hProcess);
+        return -1;
     }
-    CloseHandle(sei.hProcess);
-    return -1;
+    g_helper_process = sei.hProcess;
+    g_helper_uac_ok = 1;
+    return 0;
 }
 
 static int run_elevated_helper(HWND dialog, const wchar_t *args)
@@ -786,6 +795,15 @@ static void set_local_datetime(HWND dialog)
     int is_admin = 0;
 
     ZeroMemory(&ctx, sizeof(ctx));
+
+    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
+        rc = ensure_elevated_helper(dialog);
+        if (rc != 0) {
+            bump_main_window_layer(dialog);
+            return;
+        }
+        refresh_datetime_block(dialog);
+    }
 
     rc = (int)DialogBoxParamW(g_instance, MAKEINTRESOURCEW(IDD_SET_TIME), dialog, set_time_dialog_proc, (LPARAM)&ctx);
     if (rc != IDOK || !ctx.has_selected) {

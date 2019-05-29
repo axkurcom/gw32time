@@ -616,21 +616,8 @@ static int run_internal_helper_server(int argc, wchar_t **argv)
         return 2;
     }
 
-    pipe = CreateNamedPipeW(
-        argv[2],
-        PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        1,
-        sizeof(exit_code),
-        sizeof(command),
-        0,
-        NULL);
+    pipe = CreateFileW(argv[2], GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
-        return 1;
-    }
-
-    if (!ConnectNamedPipe(pipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
-        CloseHandle(pipe);
         return 1;
     }
 
@@ -651,7 +638,6 @@ static int run_internal_helper_server(int argc, wchar_t **argv)
         }
     }
 
-    DisconnectNamedPipe(pipe);
     CloseHandle(pipe);
     return 0;
 }
