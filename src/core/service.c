@@ -340,16 +340,26 @@ static int svc_stop_for_restart(const wchar_t *name, DWORD timeout_ms)
     return -1;
 }
 
+static int svc_restart_recover_success(const wchar_t *name)
+{
+    svc_state_t state;
+
+    if (svc_wait_until_not_pending(name, &state, 5000) != 0) {
+        return -1;
+    }
+    return state == SVC_STATE_RUNNING ? 0 : -1;
+}
+
 int svc_restart(const wchar_t *name)
 {
     svc_state_t state;
 
     if (svc_wait_until_not_pending(name, &state, 10000) != 0) {
-        return -1;
+        return svc_restart_recover_success(name);
     }
     if (state == SVC_STATE_RUNNING || state == SVC_STATE_STOP_PENDING || state == SVC_STATE_START_PENDING) {
         if (svc_stop_for_restart(name, 10000) != 0) {
-            return -1;
+            return svc_restart_recover_success(name);
         }
     } else if (state != SVC_STATE_STOPPED) {
         SetLastError(ERROR_SERVICE_CANNOT_ACCEPT_CTRL);
@@ -358,11 +368,14 @@ int svc_restart(const wchar_t *name)
 
     if (svc_start(name) != 0) {
         if (svc_query_state(name, &state) != 0 || state != SVC_STATE_RUNNING) {
-            return -1;
+            return svc_restart_recover_success(name);
         }
     }
 
-    return svc_wait_for_state(name, SVC_STATE_RUNNING, 10000);
+    if (svc_wait_for_state(name, SVC_STATE_RUNNING, 10000) != 0) {
+        return svc_restart_recover_success(name);
+    }
+    return 0;
 }
 
 int svc_set_start_type(const wchar_t *name, svc_start_type_t start_type)
