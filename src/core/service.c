@@ -297,6 +297,49 @@ static int svc_wait_until_not_pending(const wchar_t *name, svc_state_t *out, DWO
     return -1;
 }
 
+static int svc_stop_for_restart(const wchar_t *name, DWORD timeout_ms)
+{
+    DWORD waited = 0;
+    DWORD last_error = ERROR_SUCCESS;
+    svc_state_t state = SVC_STATE_UNKNOWN;
+
+    while (waited <= timeout_ms) {
+        if (svc_query_state(name, &state) != 0) {
+            return -1;
+        }
+        if (state == SVC_STATE_STOPPED) {
+            return 0;
+        }
+        if (state == SVC_STATE_STOP_PENDING) {
+            Sleep(250);
+            waited += 250;
+            continue;
+        }
+        if (state == SVC_STATE_RUNNING) {
+            if (svc_stop(name) == 0) {
+                return svc_wait_for_state(name, SVC_STATE_STOPPED, timeout_ms - waited);
+            }
+            last_error = GetLastError();
+            if (last_error == ERROR_SERVICE_CANNOT_ACCEPT_CTRL || last_error == ERROR_DEPENDENT_SERVICES_RUNNING) {
+                Sleep(250);
+                waited += 250;
+                continue;
+            }
+            SetLastError(last_error);
+            return -1;
+        }
+        if (state == SVC_STATE_START_PENDING) {
+            Sleep(250);
+            waited += 250;
+            continue;
+        }
+        SetLastError(ERROR_SERVICE_CANNOT_ACCEPT_CTRL);
+        return -1;
+    }
+    SetLastError(last_error != ERROR_SUCCESS ? last_error : ERROR_SERVICE_REQUEST_TIMEOUT);
+    return -1;
+}
+
 int svc_restart(const wchar_t *name)
 {
     svc_state_t state;
@@ -304,11 +347,8 @@ int svc_restart(const wchar_t *name)
     if (svc_wait_until_not_pending(name, &state, 10000) != 0) {
         return -1;
     }
-    if (state == SVC_STATE_RUNNING) {
-        if (svc_stop(name) != 0) {
-            return -1;
-        }
-        if (svc_wait_for_state(name, SVC_STATE_STOPPED, 10000) != 0) {
+    if (state == SVC_STATE_RUNNING || state == SVC_STATE_STOP_PENDING || state == SVC_STATE_START_PENDING) {
+        if (svc_stop_for_restart(name, 10000) != 0) {
             return -1;
         }
     } else if (state != SVC_STATE_STOPPED) {
