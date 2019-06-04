@@ -259,20 +259,61 @@ int svc_stop(const wchar_t *name)
     return 0;
 }
 
+static int svc_wait_for_state(const wchar_t *name, svc_state_t desired, DWORD timeout_ms)
+{
+    DWORD waited = 0;
+    svc_state_t state;
+
+    while (waited <= timeout_ms) {
+        if (svc_query_state(name, &state) == 0 && state == desired) {
+            return 0;
+        }
+        Sleep(250);
+        waited += 250;
+    }
+    SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
+    return -1;
+}
+
+static int svc_wait_until_not_pending(const wchar_t *name, svc_state_t *out, DWORD timeout_ms)
+{
+    DWORD waited = 0;
+    svc_state_t state = SVC_STATE_UNKNOWN;
+
+    while (waited <= timeout_ms) {
+        if (svc_query_state(name, &state) != 0) {
+            return -1;
+        }
+        if (state != SVC_STATE_START_PENDING && state != SVC_STATE_STOP_PENDING) {
+            if (out != NULL) {
+                *out = state;
+            }
+            return 0;
+        }
+        Sleep(250);
+        waited += 250;
+    }
+    SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
+    return -1;
+}
+
 int svc_restart(const wchar_t *name)
 {
     svc_state_t state;
-    int i;
 
-    if (svc_stop(name) != 0) {
+    if (svc_wait_until_not_pending(name, &state, 10000) != 0) {
         return -1;
     }
-
-    for (i = 0; i < 40; i++) {
-        if (svc_query_state(name, &state) == 0 && state == SVC_STATE_STOPPED) {
-            break;
+    if (state == SVC_STATE_RUNNING) {
+        if (svc_stop(name) != 0) {
+            return -1;
         }
-        Sleep(250);
+        if (svc_wait_for_state(name, SVC_STATE_STOPPED, 10000) != 0) {
+            return -1;
+        }
+    } else if (state != SVC_STATE_STOPPED) {
+        SetLastError(ERROR_SERVICE_CANNOT_ACCEPT_CTRL);
+        return -1;
     }
 
     if (svc_start(name) != 0) {
@@ -281,15 +322,7 @@ int svc_restart(const wchar_t *name)
         }
     }
 
-    for (i = 0; i < 40; i++) {
-        if (svc_query_state(name, &state) == 0 && state == SVC_STATE_RUNNING) {
-            return 0;
-        }
-        Sleep(250);
-    }
-
-    SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
-    return -1;
+    return svc_wait_for_state(name, SVC_STATE_RUNNING, 10000);
 }
 
 int svc_set_start_type(const wchar_t *name, svc_start_type_t start_type)
