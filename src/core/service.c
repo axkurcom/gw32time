@@ -99,11 +99,10 @@ static SC_HANDLE open_service_for_query(const wchar_t *name, DWORD access, SC_HA
     return open_service_handle(name, SC_MANAGER_CONNECT, access, scm);
 }
 
-int svc_query_state(const wchar_t *name, svc_state_t *out)
+static int svc_query_status_process(const wchar_t *name, SERVICE_STATUS_PROCESS *out)
 {
     SC_HANDLE scm;
     SC_HANDLE service;
-    SERVICE_STATUS_PROCESS status;
     DWORD bytes_needed = 0;
 
     if (name == NULL || out == NULL) {
@@ -111,7 +110,7 @@ int svc_query_state(const wchar_t *name, svc_state_t *out)
         return -1;
     }
 
-    *out = SVC_STATE_UNKNOWN;
+    ZeroMemory(out, sizeof(*out));
     service = open_service_for_query(name, SERVICE_QUERY_STATUS, &scm);
     if (service == NULL) {
         return -1;
@@ -120,8 +119,8 @@ int svc_query_state(const wchar_t *name, svc_state_t *out)
     if (!QueryServiceStatusEx(
             service,
             SC_STATUS_PROCESS_INFO,
-            (LPBYTE)&status,
-            sizeof(status),
+            (LPBYTE)out,
+            sizeof(*out),
             &bytes_needed)) {
         DWORD last_error = GetLastError();
         CloseServiceHandle(service);
@@ -130,9 +129,51 @@ int svc_query_state(const wchar_t *name, svc_state_t *out)
         return -1;
     }
 
-    *out = map_state(status.dwCurrentState);
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
+    return 0;
+}
+
+static int svc_state_is_pending(svc_state_t state)
+{
+    return state == SVC_STATE_START_PENDING ||
+           state == SVC_STATE_STOP_PENDING ||
+           state == SVC_STATE_CONTINUE_PENDING ||
+           state == SVC_STATE_PAUSE_PENDING;
+}
+
+static DWORD svc_pending_wait_ms(const SERVICE_STATUS_PROCESS *status)
+{
+    DWORD wait_ms;
+
+    if (status == NULL || status->dwWaitHint == 0) {
+        return 250;
+    }
+
+    wait_ms = status->dwWaitHint / 10;
+    if (wait_ms < 100) {
+        wait_ms = 100;
+    }
+    if (wait_ms > 1000) {
+        wait_ms = 1000;
+    }
+    return wait_ms;
+}
+
+int svc_query_state(const wchar_t *name, svc_state_t *out)
+{
+    SERVICE_STATUS_PROCESS status;
+
+    if (name == NULL || out == NULL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    *out = SVC_STATE_UNKNOWN;
+    if (svc_query_status_process(name, &status) != 0) {
+        return -1;
+    }
+    *out = map_state(status.dwCurrentState);
     return 0;
 }
 
@@ -261,15 +302,48 @@ int svc_stop(const wchar_t *name)
 
 static int svc_wait_for_state(const wchar_t *name, svc_state_t desired, DWORD timeout_ms)
 {
-    DWORD waited = 0;
-    svc_state_t state;
+    DWORD start_tick = GetTickCount();
+    DWORD checkpoint_tick = start_tick;
+    DWORD last_checkpoint = 0;
 
-    while (waited <= timeout_ms) {
-        if (svc_query_state(name, &state) == 0 && state == desired) {
+    for (;;) {
+        SERVICE_STATUS_PROCESS status;
+        svc_state_t state;
+        DWORD now_tick;
+        DWORD sleep_ms;
+        DWORD elapsed_ms;
+
+        if (svc_query_status_process(name, &status) != 0) {
+            return -1;
+        }
+        state = map_state(status.dwCurrentState);
+        if (state == desired) {
             return 0;
         }
-        Sleep(250);
-        waited += 250;
+
+        now_tick = GetTickCount();
+        elapsed_ms = now_tick - start_tick;
+        if (elapsed_ms >= timeout_ms) {
+            break;
+        }
+
+        if (!svc_state_is_pending(state)) {
+            Sleep(250);
+            continue;
+        }
+
+        if (status.dwCheckPoint != 0 && status.dwCheckPoint != last_checkpoint) {
+            last_checkpoint = status.dwCheckPoint;
+            checkpoint_tick = now_tick;
+        } else if ((now_tick - checkpoint_tick) >= status.dwWaitHint && status.dwWaitHint != 0) {
+            break;
+        }
+
+        sleep_ms = svc_pending_wait_ms(&status);
+        if (sleep_ms > (timeout_ms - elapsed_ms)) {
+            sleep_ms = timeout_ms - elapsed_ms;
+        }
+        Sleep(sleep_ms);
     }
     SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
     return -1;
@@ -277,21 +351,46 @@ static int svc_wait_for_state(const wchar_t *name, svc_state_t desired, DWORD ti
 
 static int svc_wait_until_not_pending(const wchar_t *name, svc_state_t *out, DWORD timeout_ms)
 {
-    DWORD waited = 0;
-    svc_state_t state = SVC_STATE_UNKNOWN;
+    DWORD start_tick = GetTickCount();
+    DWORD checkpoint_tick = start_tick;
+    DWORD last_checkpoint = 0;
 
-    while (waited <= timeout_ms) {
-        if (svc_query_state(name, &state) != 0) {
+    for (;;) {
+        SERVICE_STATUS_PROCESS status;
+        svc_state_t state = SVC_STATE_UNKNOWN;
+        DWORD now_tick;
+        DWORD sleep_ms;
+        DWORD elapsed_ms;
+
+        if (svc_query_status_process(name, &status) != 0) {
             return -1;
         }
-        if (state != SVC_STATE_START_PENDING && state != SVC_STATE_STOP_PENDING) {
+        state = map_state(status.dwCurrentState);
+        if (!svc_state_is_pending(state)) {
             if (out != NULL) {
                 *out = state;
             }
             return 0;
         }
-        Sleep(250);
-        waited += 250;
+
+        now_tick = GetTickCount();
+        elapsed_ms = now_tick - start_tick;
+        if (elapsed_ms >= timeout_ms) {
+            break;
+        }
+
+        if (status.dwCheckPoint != 0 && status.dwCheckPoint != last_checkpoint) {
+            last_checkpoint = status.dwCheckPoint;
+            checkpoint_tick = now_tick;
+        } else if ((now_tick - checkpoint_tick) >= status.dwWaitHint && status.dwWaitHint != 0) {
+            break;
+        }
+
+        sleep_ms = svc_pending_wait_ms(&status);
+        if (sleep_ms > (timeout_ms - elapsed_ms)) {
+            sleep_ms = timeout_ms - elapsed_ms;
+        }
+        Sleep(sleep_ms);
     }
     SetLastError(ERROR_SERVICE_REQUEST_TIMEOUT);
     return -1;
@@ -354,11 +453,11 @@ int svc_restart(const wchar_t *name)
 {
     svc_state_t state;
 
-    if (svc_wait_until_not_pending(name, &state, 10000) != 0) {
+    if (svc_wait_until_not_pending(name, &state, 30000) != 0) {
         return svc_restart_recover_success(name);
     }
     if (state == SVC_STATE_RUNNING || state == SVC_STATE_STOP_PENDING || state == SVC_STATE_START_PENDING) {
-        if (svc_stop_for_restart(name, 10000) != 0) {
+        if (svc_stop_for_restart(name, 30000) != 0) {
             return svc_restart_recover_success(name);
         }
     } else if (state != SVC_STATE_STOPPED) {
@@ -372,7 +471,7 @@ int svc_restart(const wchar_t *name)
         }
     }
 
-    if (svc_wait_for_state(name, SVC_STATE_RUNNING, 10000) != 0) {
+    if (svc_wait_for_state(name, SVC_STATE_RUNNING, 30000) != 0) {
         return svc_restart_recover_success(name);
     }
     return 0;

@@ -1161,6 +1161,20 @@ static void trigger_sync_probe_burst(HWND dialog)
     SetTimer(dialog, TIMER_SYNC_BURST, 1000, NULL);
 }
 
+static int restart_reached_running_state(void)
+{
+    svc_state_t state = SVC_STATE_UNKNOWN;
+    int i;
+
+    for (i = 0; i < 24; i++) {
+        if (svc_query_state(L"w32time", &state) == 0 && state == SVC_STATE_RUNNING) {
+            return 1;
+        }
+        Sleep(250);
+    }
+    return 0;
+}
+
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode)
 {
     wchar_t params[128];
@@ -1936,7 +1950,9 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             } else if (selected == IDM_SERVICE_RESTART) {
                 set_text(dialog, IDC_SERVICE, L"Restart pending");
                 if (run_service_action(dialog, L"restart", NULL) != 0) {
-                    MessageBoxW(dialog, L"Service restart failed.", L"GW32TIME", MB_ICONERROR);
+                    if (!restart_reached_running_state()) {
+                        MessageBoxW(dialog, L"Service restart failed.", L"GW32TIME", MB_ICONERROR);
+                    }
                 }
                 refresh_status(dialog);
             } else if (selected == IDM_SERVICE_MODE_AUTO) {
