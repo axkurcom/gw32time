@@ -13,6 +13,12 @@ SRC := \
 	src/core/diagnostics.c \
 	src/core/domain.c \
 	src/core/error.c \
+	src/core/ntp/ntp_checker.c \
+	src/core/ntp/ntp_packet.c \
+	src/core/ntp/ntp_score.c \
+	src/core/ntp/ntp_socket.c \
+	src/core/ntp/ntp_stats.c \
+	src/core/ntp/ntp_time.c \
 	src/core/ntp_probe.c \
 	src/core/preset.c \
 	src/core/privilege.c \

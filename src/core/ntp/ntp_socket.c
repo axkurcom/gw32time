@@ -1,5 +1,6 @@
 #include "ntp_socket.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -58,7 +59,7 @@ int gw_ntp_socket_send_checker(
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
-    _snprintf(port_text, sizeof(port_text), "%u", (unsigned)port);
+    snprintf(port_text, sizeof(port_text), "%u", (unsigned)port);
     port_text[sizeof(port_text) - 1] = '\0';
 
     if (GetAddrInfoA(host, port_text, &hints, &resolved) != 0 || resolved == NULL) {
