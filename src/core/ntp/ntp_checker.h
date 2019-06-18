@@ -48,6 +48,11 @@ typedef struct gw_ntp_checker_result {
     gw_ntp_error_t last_error;
 } gw_ntp_checker_result_t;
 
+typedef struct gw_ntp_explain {
+    char lines[16][128];
+    int count;
+} gw_ntp_explain_t;
+
 int gw_ntp_checker_sample(
     const char *host,
     int timeout_ms,
@@ -58,5 +63,9 @@ int gw_ntp_checker_server(
     const char *host,
     const gw_ntp_checker_config_t *config,
     gw_ntp_checker_result_t *result);
+
+int gw_ntp_checker_explain(
+    const gw_ntp_checker_result_t *result,
+    gw_ntp_explain_t *explain);
 
 #endif

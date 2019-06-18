@@ -1,10 +1,14 @@
 #include "ntp_checker.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <string.h>
+#include <windows.h>
 
 #include "ntp_packet.h"
+#include "ntp_score.h"
 #include "ntp_socket.h"
+#include "ntp_stats.h"
 #include "ntp_time.h"
 
 static void gw_ntp_reference_id_to_text(uint32_t reference_id, char out[8])
@@ -110,7 +114,16 @@ int gw_ntp_checker_server(
     gw_ntp_checker_result_t *result)
 {
     gw_ntp_sample_t sample;
+    gw_ntp_stats_result_t offset_stats;
+    gw_ntp_stats_result_t delay_stats;
+    double offsets[32];
+    double filtered_offsets[32];
+    double delays[32];
+    int filtered_count = 0;
+    int i;
+    int samples;
     int timeout_ms;
+    int interval_ms;
     int port;
 
     if (host == NULL || host[0] == '\0' || result == NULL) {
@@ -120,25 +133,98 @@ int gw_ntp_checker_server(
     memset(result, 0, sizeof(*result));
     result->last_error = GW_NTP_ERR_SOCKET;
     timeout_ms = (config != NULL && config->timeout_ms > 0) ? config->timeout_ms : 1000;
+    interval_ms = (config != NULL && config->interval_ms >= 0) ? config->interval_ms : 150;
     port = (config != NULL && config->port > 0) ? config->port : 123;
-    result->total_samples = 1;
-
-    if (gw_ntp_checker_sample(host, timeout_ms, port, &sample) != 0) {
-        return -1;
+    samples = (config != NULL && config->samples > 0) ? config->samples : 5;
+    if (samples > (int)(sizeof(offsets) / sizeof(offsets[0]))) {
+        samples = (int)(sizeof(offsets) / sizeof(offsets[0]));
     }
-    result->last_error = sample.error;
-    if (sample.error == GW_NTP_OK) {
-        result->success_samples = 1;
-        result->reachability = 1.0;
-        result->offset_median_ms = sample.offset_ms;
-        result->offset_mean_ms = sample.offset_ms;
-        result->offset_stddev_ms = 0.0;
-        result->delay_min_ms = sample.delay_ms;
-        result->delay_mean_ms = sample.delay_ms;
-        result->jitter_ms = 0.0;
-        result->score = 1.0;
-    }
+    result->total_samples = samples;
     strncpy(result->host, host, sizeof(result->host) - 1);
     result->host[sizeof(result->host) - 1] = '\0';
+
+    for (i = 0; i < samples; i++) {
+        if (gw_ntp_checker_sample(host, timeout_ms, port, &sample) != 0) {
+            return -1;
+        }
+        result->last_error = sample.error;
+        if (sample.error == GW_NTP_OK) {
+            offsets[result->success_samples] = sample.offset_ms;
+            delays[result->success_samples] = sample.delay_ms;
+            result->success_samples++;
+        }
+        if (i + 1 < samples && interval_ms > 0) {
+            Sleep((DWORD)interval_ms);
+        }
+    }
+
+    if (result->success_samples == 0) {
+        result->reachability = 0.0;
+        result->score = 0.0;
+        return 0;
+    }
+    result->reachability = (double)result->success_samples / (double)result->total_samples;
+    if (gw_ntp_stats_filter_outliers_median(
+            offsets,
+            result->success_samples,
+            50.0,
+            filtered_offsets,
+            (int)(sizeof(filtered_offsets) / sizeof(filtered_offsets[0])),
+            &filtered_count) != 0 ||
+        filtered_count <= 0) {
+        filtered_count = result->success_samples;
+        memcpy(filtered_offsets, offsets, (size_t)filtered_count * sizeof(double));
+    }
+    if (gw_ntp_stats_calculate(filtered_offsets, filtered_count, &offset_stats) != 0) {
+        return -1;
+    }
+    if (gw_ntp_stats_calculate(delays, result->success_samples, &delay_stats) != 0) {
+        return -1;
+    }
+
+    result->offset_median_ms = offset_stats.median;
+    result->offset_mean_ms = offset_stats.mean;
+    result->offset_stddev_ms = offset_stats.stddev;
+    result->delay_min_ms = delay_stats.min;
+    result->delay_mean_ms = delay_stats.mean;
+    result->jitter_ms = offset_stats.stddev;
+    result->score = gw_ntp_score(result);
+    return 0;
+}
+
+int gw_ntp_checker_explain(
+    const gw_ntp_checker_result_t *result,
+    gw_ntp_explain_t *explain)
+{
+    if (result == NULL || explain == NULL) {
+        return -1;
+    }
+    memset(explain, 0, sizeof(*explain));
+
+    snprintf(
+        explain->lines[explain->count++],
+        sizeof(explain->lines[0]),
+        "+ reachability %.0f%% (%d/%d)",
+        result->reachability * 100.0,
+        result->success_samples,
+        result->total_samples);
+
+    if (result->jitter_ms <= 10.0) {
+        snprintf(explain->lines[explain->count++], sizeof(explain->lines[0]), "+ low jitter %.2fms", result->jitter_ms);
+    } else {
+        snprintf(explain->lines[explain->count++], sizeof(explain->lines[0]), "- high jitter %.2fms", result->jitter_ms);
+    }
+
+    if (result->delay_min_ms <= 100.0) {
+        snprintf(explain->lines[explain->count++], sizeof(explain->lines[0]), "+ low delay %.2fms", result->delay_min_ms);
+    } else {
+        snprintf(explain->lines[explain->count++], sizeof(explain->lines[0]), "- high delay %.2fms", result->delay_min_ms);
+    }
+
+    snprintf(
+        explain->lines[explain->count++],
+        sizeof(explain->lines[0]),
+        "offset median %.2fms",
+        result->offset_median_ms);
     return 0;
 }
