@@ -46,6 +46,7 @@ typedef struct gw_ntp_checker_result {
     double jitter_ms;
     double score;
     gw_ntp_error_t last_error;
+    uint8_t stratum;
 } gw_ntp_checker_result_t;
 
 typedef struct gw_ntp_explain {

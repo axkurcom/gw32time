@@ -152,6 +152,7 @@ int gw_ntp_checker_server(
             offsets[result->success_samples] = sample.offset_ms;
             delays[result->success_samples] = sample.delay_ms;
             result->success_samples++;
+            result->stratum = sample.stratum;
         }
         if (i + 1 < samples && interval_ms > 0) {
             Sleep((DWORD)interval_ms);
