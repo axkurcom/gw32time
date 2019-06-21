@@ -11,6 +11,7 @@
 #include "../core/diagnostics.h"
 #include "../core/domain.h"
 #include "../core/error.h"
+#include "../core/ntp/ntp_checker.h"
 #include "../core/ntp_probe.h"
 #include "../core/preset.h"
 #include "../core/privilege.h"
@@ -49,6 +50,7 @@ static void print_help(void)
     wprintf(L"  gw32time service status|start|restart\n");
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers test <host>\n");
+    wprintf(L"  gw32time checker <host...>\n");
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync] [--force-domain]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
@@ -59,6 +61,71 @@ static void print_help(void)
     wprintf(L"  gw32time restore <file> [--dry-run] [--yes]\n");
     wprintf(L"  gw32time menu\n");
     wprintf(L"  gw32time sync [--yes]\n");
+}
+
+static int utf8_from_wide(const wchar_t *input, char *out, size_t out_len)
+{
+    int written;
+
+    if (input == NULL || out == NULL || out_len == 0) {
+        return -1;
+    }
+    written = WideCharToMultiByte(CP_UTF8, 0, input, -1, out, (int)out_len, NULL, NULL);
+    if (written <= 0) {
+        return -1;
+    }
+    out[out_len - 1] = '\0';
+    return 0;
+}
+
+static int checker_command(int argc, wchar_t **argv)
+{
+    gw_ntp_checker_config_t cfg;
+    int i;
+    int start_idx = 2;
+    int any_success = 0;
+
+    if (argc < 3) {
+        fwprintf(stderr, L"Usage: gw32time checker <host...>\n");
+        return 2;
+    }
+
+    ZeroMemory(&cfg, sizeof(cfg));
+    cfg.samples = 5;
+    cfg.timeout_ms = 800;
+    cfg.interval_ms = 150;
+    cfg.port = 123;
+
+    wprintf(L"Server                       Reach   Offset      Delay       Jitter      Score\n");
+    wprintf(L"-------------------------------------------------------------------------------\n");
+
+    for (i = start_idx; i < argc; i++) {
+        char host_utf8[256];
+        gw_ntp_checker_result_t result;
+
+        if (utf8_from_wide(argv[i], host_utf8, sizeof(host_utf8)) != 0) {
+            fwprintf(stderr, L"Host conversion failed for %ls\n", argv[i]);
+            continue;
+        }
+        if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0) {
+            fwprintf(stderr, L"Probe failed for %ls\n", argv[i]);
+            continue;
+        }
+
+        wprintf(
+            L"%-28ls %d/%-3d  %+-9.2fms %8.2fms %9.2fms %6.2f\n",
+            argv[i],
+            result.success_samples,
+            result.total_samples,
+            result.offset_median_ms,
+            result.delay_mean_ms,
+            result.jitter_ms,
+            result.score);
+        if (result.success_samples > 0) {
+            any_success = 1;
+        }
+    }
+    return any_success ? 0 : 1;
 }
 
 static int print_admin_status(void)
@@ -1703,6 +1770,10 @@ int cli_dispatch(int argc, wchar_t **argv)
         fwprintf(stderr, L"       gw32time servers test <host>\n");
         fwprintf(stderr, L"       gw32time servers set <host...> [--dry-run] [--yes] [--no-sync] [--force-domain]\n");
         return 2;
+    }
+
+    if (arg_is(argv[1], L"checker")) {
+        return checker_command(argc, argv);
     }
 
     if (arg_is(argv[1], L"poll")) {
