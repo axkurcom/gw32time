@@ -84,11 +84,8 @@ static int checker_command(int argc, wchar_t **argv)
     int i;
     int start_idx = 2;
     int any_success = 0;
-
-    if (argc < 3) {
-        fwprintf(stderr, L"Usage: gw32time checker <host...>\n");
-        return 2;
-    }
+    int json = 0;
+    int host_count = 0;
 
     ZeroMemory(&cfg, sizeof(cfg));
     cfg.samples = 5;
@@ -96,12 +93,67 @@ static int checker_command(int argc, wchar_t **argv)
     cfg.interval_ms = 150;
     cfg.port = 123;
 
-    wprintf(L"Server                       Reach   Offset      Delay       Jitter      Score\n");
-    wprintf(L"-------------------------------------------------------------------------------\n");
+    for (i = 2; i < argc; i++) {
+        if (arg_is(argv[i], L"--json")) {
+            json = 1;
+            continue;
+        }
+        if (arg_is(argv[i], L"--samples") && i + 1 < argc) {
+            cfg.samples = _wtoi(argv[++i]);
+            continue;
+        }
+        if (arg_is(argv[i], L"--timeout") && i + 1 < argc) {
+            cfg.timeout_ms = _wtoi(argv[++i]);
+            continue;
+        }
+        if (arg_is(argv[i], L"--interval") && i + 1 < argc) {
+            cfg.interval_ms = _wtoi(argv[++i]);
+            continue;
+        }
+        if (arg_is(argv[i], L"--port") && i + 1 < argc) {
+            cfg.port = _wtoi(argv[++i]);
+            continue;
+        }
+        if (argv[i][0] == L'-') {
+            fwprintf(stderr, L"Unknown checker option: %ls\n", argv[i]);
+            return 2;
+        }
+        host_count++;
+    }
+    if (host_count <= 0) {
+        fwprintf(
+            stderr,
+            L"Usage: gw32time checker <host...> [--samples N] [--timeout MS] [--interval MS] [--port N] [--json]\n");
+        return 2;
+    }
+    if (cfg.samples <= 0 || cfg.timeout_ms <= 0 || cfg.interval_ms < 0 || cfg.port <= 0 || cfg.port > 65535) {
+        fwprintf(stderr, L"Invalid checker parameters.\n");
+        return 2;
+    }
+
+    if (!json) {
+        wprintf(L"Server                       Reach   Offset      Delay       Jitter      Score\n");
+        wprintf(L"-------------------------------------------------------------------------------\n");
+    } else {
+        wprintf(L"[\n");
+    }
 
     for (i = start_idx; i < argc; i++) {
         char host_utf8[256];
         gw_ntp_checker_result_t result;
+        int has_more = 0;
+        int j;
+
+        if (argv[i][0] == L'-') {
+            if ((arg_is(argv[i], L"--samples") ||
+                 arg_is(argv[i], L"--timeout") ||
+                 arg_is(argv[i], L"--interval") ||
+                 arg_is(argv[i], L"--port")) &&
+                i + 1 < argc) {
+                i++;
+            }
+            continue;
+        }
 
         if (utf8_from_wide(argv[i], host_utf8, sizeof(host_utf8)) != 0) {
             fwprintf(stderr, L"Host conversion failed for %ls\n", argv[i]);
@@ -112,18 +164,47 @@ static int checker_command(int argc, wchar_t **argv)
             continue;
         }
 
-        wprintf(
-            L"%-28ls %d/%-3d  %+-9.2fms %8.2fms %9.2fms %6.2f\n",
-            argv[i],
-            result.success_samples,
-            result.total_samples,
-            result.offset_median_ms,
-            result.delay_mean_ms,
-            result.jitter_ms,
-            result.score);
+        if (!json) {
+            wprintf(
+                L"%-28ls %d/%-3d  %+-9.2fms %8.2fms %9.2fms %6.2f\n",
+                argv[i],
+                result.success_samples,
+                result.total_samples,
+                result.offset_median_ms,
+                result.delay_mean_ms,
+                result.jitter_ms,
+                result.score);
+        } else {
+            for (j = i + 1; j < argc; j++) {
+                if (argv[j][0] != L'-') {
+                    has_more = 1;
+                    break;
+                }
+                if ((arg_is(argv[j], L"--samples") ||
+                     arg_is(argv[j], L"--timeout") ||
+                     arg_is(argv[j], L"--interval") ||
+                     arg_is(argv[j], L"--port")) &&
+                    j + 1 < argc) {
+                    j++;
+                }
+            }
+            wprintf(L"  {\n");
+            wprintf(L"    \"server\": \"%ls\",\n", argv[i]);
+            wprintf(L"    \"samples\": %d,\n", result.total_samples);
+            wprintf(L"    \"success\": %d,\n", result.success_samples);
+            wprintf(L"    \"reachability\": %.4f,\n", result.reachability);
+            wprintf(L"    \"offset_ms\": %.3f,\n", result.offset_median_ms);
+            wprintf(L"    \"delay_ms\": %.3f,\n", result.delay_mean_ms);
+            wprintf(L"    \"jitter_ms\": %.3f,\n", result.jitter_ms);
+            wprintf(L"    \"score\": %.4f\n", result.score);
+            wprintf(L"  }%ls\n", has_more ? L"," : L"");
+        }
         if (result.success_samples > 0) {
             any_success = 1;
         }
+    }
+    if (json) {
+        wprintf(L"]\n");
     }
     return any_success ? 0 : 1;
 }
