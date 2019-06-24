@@ -78,14 +78,38 @@ static int utf8_from_wide(const wchar_t *input, char *out, size_t out_len)
     return 0;
 }
 
+typedef struct checker_task {
+    wchar_t host[256];
+    char host_utf8[256];
+    gw_ntp_checker_config_t cfg;
+    gw_ntp_checker_result_t result;
+    int rc;
+    int has_result;
+    HANDLE thread;
+} checker_task_t;
+
+static DWORD WINAPI checker_worker(LPVOID param)
+{
+    checker_task_t *task = (checker_task_t *)param;
+
+    if (task == NULL) {
+        return 1;
+    }
+    task->rc = gw_ntp_checker_server(task->host_utf8, &task->cfg, &task->result);
+    task->has_result = (task->rc == 0) ? 1 : 0;
+    return 0;
+}
+
 static int checker_command(int argc, wchar_t **argv)
 {
     gw_ntp_checker_config_t cfg;
+    checker_task_t tasks[64];
     int i;
-    int start_idx = 2;
     int any_success = 0;
     int json = 0;
+    int parallel = 0;
     int host_count = 0;
+    int task_count = 0;
 
     ZeroMemory(&cfg, sizeof(cfg));
     cfg.samples = 5;
@@ -96,6 +120,10 @@ static int checker_command(int argc, wchar_t **argv)
     for (i = 2; i < argc; i++) {
         if (arg_is(argv[i], L"--json")) {
             json = 1;
+            continue;
+        }
+        if (arg_is(argv[i], L"--parallel")) {
+            parallel = 1;
             continue;
         }
         if (arg_is(argv[i], L"--samples") && i + 1 < argc) {
@@ -123,7 +151,7 @@ static int checker_command(int argc, wchar_t **argv)
     if (host_count <= 0) {
         fwprintf(
             stderr,
-            L"Usage: gw32time checker <host...> [--samples N] [--timeout MS] [--interval MS] [--port N] [--json]\n");
+            L"Usage: gw32time checker <host...> [--samples N] [--timeout MS] [--interval MS] [--port N] [--json] [--parallel]\n");
         return 2;
     }
     if (cfg.samples <= 0 || cfg.timeout_ms <= 0 || cfg.interval_ms < 0 || cfg.port <= 0 || cfg.port > 65535) {
@@ -138,12 +166,7 @@ static int checker_command(int argc, wchar_t **argv)
         wprintf(L"[\n");
     }
 
-    for (i = start_idx; i < argc; i++) {
-        char host_utf8[256];
-        gw_ntp_checker_result_t result;
-        int has_more = 0;
-        int j;
-
+    for (i = 2; i < argc; i++) {
         if (argv[i][0] == L'-') {
             if ((arg_is(argv[i], L"--samples") ||
                  arg_is(argv[i], L"--timeout") ||
@@ -154,55 +177,83 @@ static int checker_command(int argc, wchar_t **argv)
             }
             continue;
         }
-
-        if (utf8_from_wide(argv[i], host_utf8, sizeof(host_utf8)) != 0) {
-            fwprintf(stderr, L"Host conversion failed for %ls\n", argv[i]);
+        if (task_count >= (int)(sizeof(tasks) / sizeof(tasks[0]))) {
+            break;
+        }
+        ZeroMemory(&tasks[task_count], sizeof(tasks[task_count]));
+        wcsncpy(tasks[task_count].host, argv[i], (sizeof(tasks[task_count].host) / sizeof(tasks[task_count].host[0])) - 1);
+        tasks[task_count].host[(sizeof(tasks[task_count].host) / sizeof(tasks[task_count].host[0])) - 1] = L'\0';
+        if (utf8_from_wide(tasks[task_count].host, tasks[task_count].host_utf8, sizeof(tasks[task_count].host_utf8)) != 0) {
+            fwprintf(stderr, L"Host conversion failed for %ls\n", tasks[task_count].host);
             continue;
         }
-        if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0) {
-            fwprintf(stderr, L"Probe failed for %ls\n", argv[i]);
+        tasks[task_count].cfg = cfg;
+        task_count++;
+    }
+
+    if (parallel) {
+        for (i = 0; i < task_count; i++) {
+            tasks[i].thread = CreateThread(NULL, 0, checker_worker, &tasks[i], 0, NULL);
+        }
+        for (i = 0; i < task_count; i++) {
+            if (tasks[i].thread != NULL) {
+                WaitForSingleObject(tasks[i].thread, INFINITE);
+                CloseHandle(tasks[i].thread);
+                tasks[i].thread = NULL;
+            } else {
+                tasks[i].rc = gw_ntp_checker_server(tasks[i].host_utf8, &tasks[i].cfg, &tasks[i].result);
+                tasks[i].has_result = (tasks[i].rc == 0) ? 1 : 0;
+            }
+        }
+    } else {
+        for (i = 0; i < task_count; i++) {
+            tasks[i].rc = gw_ntp_checker_server(tasks[i].host_utf8, &tasks[i].cfg, &tasks[i].result);
+            tasks[i].has_result = (tasks[i].rc == 0) ? 1 : 0;
+        }
+    }
+
+    for (i = 0; i < task_count; i++) {
+        int has_more = 0;
+        int j;
+
+        if (!tasks[i].has_result) {
+            fwprintf(stderr, L"Probe failed for %ls\n", tasks[i].host);
             continue;
         }
 
         if (!json) {
             wprintf(
                 L"%-28ls %d/%-3d  %+-9.2fms %8.2fms %9.2fms %6.2f\n",
-                argv[i],
-                result.success_samples,
-                result.total_samples,
-                result.offset_median_ms,
-                result.delay_mean_ms,
-                result.jitter_ms,
-                result.score);
+                tasks[i].host,
+                tasks[i].result.success_samples,
+                tasks[i].result.total_samples,
+                tasks[i].result.offset_median_ms,
+                tasks[i].result.delay_mean_ms,
+                tasks[i].result.jitter_ms,
+                tasks[i].result.score);
         } else {
-            for (j = i + 1; j < argc; j++) {
-                if (argv[j][0] != L'-') {
+            for (j = i + 1; j < task_count; j++) {
+                if (tasks[j].has_result) {
                     has_more = 1;
                     break;
                 }
-                if ((arg_is(argv[j], L"--samples") ||
-                     arg_is(argv[j], L"--timeout") ||
-                     arg_is(argv[j], L"--interval") ||
-                     arg_is(argv[j], L"--port")) &&
-                    j + 1 < argc) {
-                    j++;
-                }
             }
             wprintf(L"  {\n");
-            wprintf(L"    \"server\": \"%ls\",\n", argv[i]);
-            wprintf(L"    \"samples\": %d,\n", result.total_samples);
-            wprintf(L"    \"success\": %d,\n", result.success_samples);
-            wprintf(L"    \"reachability\": %.4f,\n", result.reachability);
-            wprintf(L"    \"offset_ms\": %.3f,\n", result.offset_median_ms);
-            wprintf(L"    \"delay_ms\": %.3f,\n", result.delay_mean_ms);
-            wprintf(L"    \"jitter_ms\": %.3f,\n", result.jitter_ms);
-            wprintf(L"    \"score\": %.4f\n", result.score);
+            wprintf(L"    \"server\": \"%ls\",\n", tasks[i].host);
+            wprintf(L"    \"samples\": %d,\n", tasks[i].result.total_samples);
+            wprintf(L"    \"success\": %d,\n", tasks[i].result.success_samples);
+            wprintf(L"    \"reachability\": %.4f,\n", tasks[i].result.reachability);
+            wprintf(L"    \"offset_ms\": %.3f,\n", tasks[i].result.offset_median_ms);
+            wprintf(L"    \"delay_ms\": %.3f,\n", tasks[i].result.delay_mean_ms);
+            wprintf(L"    \"jitter_ms\": %.3f,\n", tasks[i].result.jitter_ms);
+            wprintf(L"    \"score\": %.4f\n", tasks[i].result.score);
             wprintf(L"  }%ls\n", has_more ? L"," : L"");
         }
-        if (result.success_samples > 0) {
+        if (tasks[i].result.success_samples > 0) {
             any_success = 1;
         }
     }
+
     if (json) {
         wprintf(L"]\n");
     }
