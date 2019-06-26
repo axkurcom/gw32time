@@ -13,6 +13,7 @@
 #include "../core/config_file.h"
 #include "../core/diagnostics.h"
 #include "../core/domain.h"
+#include "../core/ntp/ntp_checker.h"
 #include "../core/ntp_probe.h"
 #include "../core/privilege.h"
 #include "../core/service.h"
@@ -131,6 +132,21 @@ static int str_eq(const wchar_t *a, const wchar_t *b)
 static int is_wspace(wchar_t ch)
 {
     return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+}
+
+static int utf8_from_wide(const wchar_t *input, char *out, size_t out_len)
+{
+    int written;
+
+    if (input == NULL || out == NULL || out_len == 0) {
+        return -1;
+    }
+    written = WideCharToMultiByte(CP_UTF8, 0, input, -1, out, (int)out_len, NULL, NULL);
+    if (written <= 0) {
+        return -1;
+    }
+    out[out_len - 1] = '\0';
+    return 0;
 }
 
 static int trim_host_inplace(wchar_t *text)
@@ -1397,7 +1413,9 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
     case WM_COMMAND:
         if (LOWORD(wparam) == IDC_DIALOG_CHECK) {
             wchar_t host[256];
-            ntp_probe_result_t result;
+            char host_utf8[256];
+            gw_ntp_checker_config_t cfg;
+            gw_ntp_checker_result_t result;
             wchar_t message[512];
 
             GetDlgItemTextW(dialog, IDC_DIALOG_SERVER, host, sizeof(host) / sizeof(host[0]));
@@ -1405,13 +1423,23 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
                 MessageBoxW(dialog, L"Server host is required.", L"GW32TIME", MB_ICONWARNING);
                 return TRUE;
             }
+            if (utf8_from_wide(host, host_utf8, sizeof(host_utf8)) != 0) {
+                MessageBoxW(dialog, L"NTP checker failed: host conversion.", L"GW32TIME", MB_ICONERROR);
+                return TRUE;
+            }
 
-            if (ntp_probe(host, 3000, &result) != 0 || !result.ok) {
+            ZeroMemory(&cfg, sizeof(cfg));
+            cfg.samples = 5;
+            cfg.timeout_ms = 1000;
+            cfg.interval_ms = 120;
+            cfg.port = 123;
+            if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0 || result.success_samples <= 0) {
                 _snwprintf(
                     message,
                     sizeof(message) / sizeof(message[0]),
-                    L"NTP probe failed: %ls",
-                    result.error[0] ? result.error : L"unknown error");
+                    L"NTP checker failed.\nSuccess: %d/%d",
+                    result.success_samples,
+                    result.total_samples);
                 message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
                 MessageBoxW(dialog, message, L"GW32TIME", MB_ICONERROR);
                 return TRUE;
@@ -1420,9 +1448,13 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
             _snwprintf(
                 message,
                 sizeof(message) / sizeof(message[0]),
-                L"NTP probe OK.\nRTT: %lu ms\nOffset: %.0f ms\nStratum: %d",
-                (unsigned long)result.rtt_ms,
-                result.offset_ms,
+                L"NTP checker OK.\nReach: %d/%d\nOffset: %.2f ms\nDelay: %.2f ms\nJitter: %.2f ms\nScore: %.2f\nStratum: %d",
+                result.success_samples,
+                result.total_samples,
+                result.offset_median_ms,
+                result.delay_mean_ms,
+                result.jitter_ms,
+                result.score,
                 result.stratum);
             message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
             MessageBoxW(dialog, message, L"GW32TIME", MB_ICONINFORMATION);
@@ -1687,12 +1719,23 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
         }
 
         {
-            ntp_probe_result_t result;
-            if (ntp_probe(ctx->rows[i].host, 3000, &result) == 0 && result.ok) {
+            char host_utf8[256];
+            gw_ntp_checker_config_t cfg;
+            gw_ntp_checker_result_t result;
+
+            ZeroMemory(&cfg, sizeof(cfg));
+            cfg.samples = 3;
+            cfg.timeout_ms = 900;
+            cfg.interval_ms = 120;
+            cfg.port = 123;
+
+            if (utf8_from_wide(ctx->rows[i].host, host_utf8, sizeof(host_utf8)) == 0 &&
+                gw_ntp_checker_server(host_utf8, &cfg, &result) == 0 &&
+                result.success_samples > 0) {
                 ctx->rows[i].has_probe = 1;
                 ctx->rows[i].stratum = result.stratum;
-                ctx->rows[i].ping_ms = result.rtt_ms;
-                ctx->rows[i].offset_ms = result.offset_ms;
+                ctx->rows[i].ping_ms = result.delay_mean_ms > 0.0 ? (DWORD)result.delay_mean_ms : 0;
+                ctx->rows[i].offset_ms = result.offset_median_ms;
             }
         }
 
