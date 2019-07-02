@@ -31,6 +31,7 @@ typedef struct gw_ntp_checker_config {
     int timeout_ms;
     int interval_ms;
     int port;
+    double outlier_threshold_ms;
 } gw_ntp_checker_config_t;
 
 typedef struct gw_ntp_checker_result {

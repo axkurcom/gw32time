@@ -125,6 +125,7 @@ int gw_ntp_checker_server(
     int timeout_ms;
     int interval_ms;
     int port;
+    double outlier_threshold_ms;
 
     if (host == NULL || host[0] == '\0' || result == NULL) {
         return -1;
@@ -135,6 +136,8 @@ int gw_ntp_checker_server(
     timeout_ms = (config != NULL && config->timeout_ms > 0) ? config->timeout_ms : 1000;
     interval_ms = (config != NULL && config->interval_ms >= 0) ? config->interval_ms : 150;
     port = (config != NULL && config->port > 0) ? config->port : 123;
+    outlier_threshold_ms =
+        (config != NULL && config->outlier_threshold_ms > 0.0) ? config->outlier_threshold_ms : 50.0;
     samples = (config != NULL && config->samples > 0) ? config->samples : 5;
     if (samples > (int)(sizeof(offsets) / sizeof(offsets[0]))) {
         samples = (int)(sizeof(offsets) / sizeof(offsets[0]));
@@ -150,7 +153,7 @@ int gw_ntp_checker_server(
         result->last_error = sample.error;
         if (sample.error == GW_NTP_OK) {
             offsets[result->success_samples] = sample.offset_ms;
-            delays[result->success_samples] = sample.delay_ms;
+            delays[result->success_samples] = sample.delay_ms < 0.0 ? 0.0 : sample.delay_ms;
             result->success_samples++;
             result->stratum = sample.stratum;
         }
@@ -168,7 +171,7 @@ int gw_ntp_checker_server(
     if (gw_ntp_stats_filter_outliers_median(
             offsets,
             result->success_samples,
-            50.0,
+            outlier_threshold_ms,
             filtered_offsets,
             (int)(sizeof(filtered_offsets) / sizeof(filtered_offsets[0])),
             &filtered_count) != 0 ||
