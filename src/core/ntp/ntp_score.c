@@ -21,6 +21,12 @@ double gw_ntp_score(const gw_ntp_checker_result_t *result)
     if (fabs(result->offset_median_ms) > 100.0) {
         score -= 0.25;
     }
+    if (result->stratum >= 8) {
+        score -= 0.10;
+    }
+    if (result->success_samples < result->total_samples) {
+        score -= 0.05;
+    }
     if (score < 0.0) {
         score = 0.0;
     }
