@@ -108,6 +108,7 @@ static int checker_command(int argc, wchar_t **argv)
     int any_success = 0;
     int json = 0;
     int parallel = 0;
+    int explain = 0;
     int host_count = 0;
     int task_count = 0;
 
@@ -124,6 +125,10 @@ static int checker_command(int argc, wchar_t **argv)
         }
         if (arg_is(argv[i], L"--parallel")) {
             parallel = 1;
+            continue;
+        }
+        if (arg_is(argv[i], L"--explain")) {
+            explain = 1;
             continue;
         }
         if (arg_is(argv[i], L"--samples") && i + 1 < argc) {
@@ -231,6 +236,18 @@ static int checker_command(int argc, wchar_t **argv)
                 tasks[i].result.delay_mean_ms,
                 tasks[i].result.jitter_ms,
                 tasks[i].result.score);
+            if (explain) {
+                gw_ntp_explain_t notes;
+                int k;
+                if (gw_ntp_checker_explain(&tasks[i].result, &notes) == 0) {
+                    for (k = 0; k < notes.count; k++) {
+                        wchar_t line_w[256];
+                        MultiByteToWideChar(CP_UTF8, 0, notes.lines[k], -1, line_w, sizeof(line_w) / sizeof(line_w[0]));
+                        line_w[(sizeof(line_w) / sizeof(line_w[0])) - 1] = L'\0';
+                        wprintf(L"  %ls\n", line_w);
+                    }
+                }
+            }
         } else {
             for (j = i + 1; j < task_count; j++) {
                 if (tasks[j].has_result) {
