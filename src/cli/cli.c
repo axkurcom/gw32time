@@ -1006,33 +1006,58 @@ static int list_servers(void)
 
 static int test_server(const wchar_t *host)
 {
-    ntp_probe_result_t result;
+    char host_utf8[256];
+    gw_ntp_checker_config_t cfg;
+    gw_ntp_checker_result_t result;
+    gw_ntp_explain_t explain;
+    int i;
 
     if (host == NULL || host[0] == L'\0') {
         fwprintf(stderr, L"Usage: gw32time servers test <host>\n");
         return 2;
     }
 
-    wprintf(L"Testing NTP server: %ls\n\n", host);
-    if (ntp_probe(host, 1500, &result) != 0) {
-        error_print_last(L"NTP probe");
+    if (utf8_from_wide(host, host_utf8, sizeof(host_utf8)) != 0) {
+        fwprintf(stderr, L"Host conversion failed.\n");
         return 1;
     }
 
-    wprintf(L"DNS:      %ls\n", result.dns_ok ? L"OK" : L"Failed");
-    wprintf(L"UDP/123:  %ls\n", result.ok ? L"OK" : L"Failed");
-    if (result.ok) {
-        wprintf(L"RTT:      %lu ms\n", (unsigned long)result.rtt_ms);
-        wprintf(L"Offset:   %.0f ms\n", result.offset_ms);
-        wprintf(L"Stratum:  %d\n", result.stratum);
+    ZeroMemory(&cfg, sizeof(cfg));
+    cfg.samples = 5;
+    cfg.timeout_ms = 800;
+    cfg.interval_ms = 120;
+    cfg.port = 123;
+    cfg.outlier_threshold_ms = 50.0;
+
+    wprintf(L"Testing NTP server: %ls\n\n", host);
+    if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0) {
+        fwprintf(stderr, L"NTP checker failed.\n");
+        return 1;
+    }
+
+    wprintf(L"Reach:    %d/%d\n", result.success_samples, result.total_samples);
+    wprintf(L"Offset:   %+.2f ms\n", result.offset_median_ms);
+    wprintf(L"Delay:    %.2f ms\n", result.delay_mean_ms);
+    wprintf(L"Jitter:   %.2f ms\n", result.jitter_ms);
+    wprintf(L"Stratum:  %d\n", result.stratum);
+    wprintf(L"Score:    %.2f\n", result.score);
+
+    if (gw_ntp_checker_explain(&result, &explain) == 0) {
+        for (i = 0; i < explain.count; i++) {
+            wchar_t line_w[256];
+            MultiByteToWideChar(CP_UTF8, 0, explain.lines[i], -1, line_w, sizeof(line_w) / sizeof(line_w[0]));
+            line_w[(sizeof(line_w) / sizeof(line_w[0])) - 1] = L'\0';
+            wprintf(L"Note:     %ls\n", line_w);
+        }
+    }
+
+    if (result.success_samples > 0) {
         wprintf(L"Result:   OK\n");
         return 0;
     }
 
     wprintf(L"Result:   Failed\n");
-    if (result.error[0] != L'\0') {
-        wprintf(L"Reason:   %ls\n", result.error);
-    }
+    wprintf(L"Reason:   no successful samples\n");
     return 1;
 }
 
