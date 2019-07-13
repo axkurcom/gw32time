@@ -50,7 +50,7 @@ static void print_help(void)
     wprintf(L"  gw32time service status|start|restart\n");
     wprintf(L"  gw32time servers list\n");
     wprintf(L"  gw32time servers test <host>\n");
-    wprintf(L"  gw32time checker <host...>\n");
+    wprintf(L"  gw32time checker <host...> [--samples N] [--timeout MS] [--interval MS] [--port N] [--parallel] [--explain] [--json]\n");
     wprintf(L"  gw32time servers set <host...> [--dry-run] [--yes] [--no-sync] [--force-domain]\n");
     wprintf(L"  gw32time poll get\n");
     wprintf(L"  gw32time poll set <seconds> [--dry-run] [--yes] [--force]\n");
@@ -263,6 +263,8 @@ static int checker_command(int argc, wchar_t **argv)
             wprintf(L"    \"offset_ms\": %.3f,\n", tasks[i].result.offset_median_ms);
             wprintf(L"    \"delay_ms\": %.3f,\n", tasks[i].result.delay_mean_ms);
             wprintf(L"    \"jitter_ms\": %.3f,\n", tasks[i].result.jitter_ms);
+            wprintf(L"    \"stratum\": %d,\n", tasks[i].result.stratum);
+            wprintf(L"    \"last_error\": %d,\n", (int)tasks[i].result.last_error);
             wprintf(L"    \"score\": %.4f\n", tasks[i].result.score);
             wprintf(L"  }%ls\n", has_more ? L"," : L"");
         }
