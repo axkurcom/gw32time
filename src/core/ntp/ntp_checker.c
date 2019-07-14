@@ -91,8 +91,16 @@ int gw_ntp_checker_sample(
         sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
+    if (sample->version < 3 || sample->version > 4) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
     if (sample->stratum == 0) {
         sample->error = GW_NTP_ERR_KISS_OF_DEATH;
+        return 0;
+    }
+    if (packet.receive_timestamp == 0 || packet.transmit_timestamp == 0) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
 
