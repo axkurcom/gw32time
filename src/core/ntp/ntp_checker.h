@@ -66,6 +66,8 @@ int gw_ntp_checker_server(
     const gw_ntp_checker_config_t *config,
     gw_ntp_checker_result_t *result);
 
+void gw_ntp_checker_default_config(gw_ntp_checker_config_t *config);
+
 int gw_ntp_checker_explain(
     const gw_ntp_checker_result_t *result,
     gw_ntp_explain_t *explain);

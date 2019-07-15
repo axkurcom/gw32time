@@ -116,6 +116,19 @@ int gw_ntp_checker_sample(
     return 0;
 }
 
+void gw_ntp_checker_default_config(gw_ntp_checker_config_t *config)
+{
+    if (config == NULL) {
+        return;
+    }
+    memset(config, 0, sizeof(*config));
+    config->samples = 5;
+    config->timeout_ms = 800;
+    config->interval_ms = 150;
+    config->port = 123;
+    config->outlier_threshold_ms = 50.0;
+}
+
 int gw_ntp_checker_server(
     const char *host,
     const gw_ntp_checker_config_t *config,
@@ -141,7 +154,7 @@ int gw_ntp_checker_server(
 
     memset(result, 0, sizeof(*result));
     result->last_error = GW_NTP_ERR_SOCKET;
-    timeout_ms = (config != NULL && config->timeout_ms > 0) ? config->timeout_ms : 1000;
+    timeout_ms = (config != NULL && config->timeout_ms > 0) ? config->timeout_ms : 800;
     interval_ms = (config != NULL && config->interval_ms >= 0) ? config->interval_ms : 150;
     port = (config != NULL && config->port > 0) ? config->port : 123;
     outlier_threshold_ms =
