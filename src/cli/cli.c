@@ -112,11 +112,7 @@ static int checker_command(int argc, wchar_t **argv)
     int host_count = 0;
     int task_count = 0;
 
-    ZeroMemory(&cfg, sizeof(cfg));
-    cfg.samples = 5;
-    cfg.timeout_ms = 800;
-    cfg.interval_ms = 150;
-    cfg.port = 123;
+    gw_ntp_checker_default_config(&cfg);
 
     for (i = 2; i < argc; i++) {
         if (arg_is(argv[i], L"--json")) {
@@ -1024,12 +1020,8 @@ static int test_server(const wchar_t *host)
         return 1;
     }
 
-    ZeroMemory(&cfg, sizeof(cfg));
-    cfg.samples = 5;
-    cfg.timeout_ms = 800;
+    gw_ntp_checker_default_config(&cfg);
     cfg.interval_ms = 120;
-    cfg.port = 123;
-    cfg.outlier_threshold_ms = 50.0;
 
     wprintf(L"Testing NTP server: %ls\n\n", host);
     if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0) {
