@@ -1428,11 +1428,9 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
                 return TRUE;
             }
 
-            ZeroMemory(&cfg, sizeof(cfg));
-            cfg.samples = 5;
+            gw_ntp_checker_default_config(&cfg);
             cfg.timeout_ms = 1000;
             cfg.interval_ms = 120;
-            cfg.port = 123;
             if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0 || result.success_samples <= 0) {
                 _snwprintf(
                     message,
@@ -1723,11 +1721,10 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
             gw_ntp_checker_config_t cfg;
             gw_ntp_checker_result_t result;
 
-            ZeroMemory(&cfg, sizeof(cfg));
+            gw_ntp_checker_default_config(&cfg);
             cfg.samples = 3;
             cfg.timeout_ms = 900;
             cfg.interval_ms = 120;
-            cfg.port = 123;
 
             if (utf8_from_wide(ctx->rows[i].host, host_utf8, sizeof(host_utf8)) == 0 &&
                 gw_ntp_checker_server(host_utf8, &cfg, &result) == 0 &&
