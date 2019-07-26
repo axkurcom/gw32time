@@ -91,3 +91,35 @@ int gw_ntp_stats_filter_outliers_median(
     *filtered_count = out_count;
     return 0;
 }
+
+int gw_ntp_stats_mad(const double *values, int count, double *median_out, double *mad_out)
+{
+    gw_ntp_stats_result_t stats;
+    double *deviations;
+    gw_ntp_stats_result_t dev_stats;
+    int i;
+
+    if (values == NULL || median_out == NULL || mad_out == NULL || count <= 0) {
+        return -1;
+    }
+    if (gw_ntp_stats_calculate(values, count, &stats) != 0) {
+        return -1;
+    }
+
+    deviations = (double *)malloc((size_t)count * sizeof(double));
+    if (deviations == NULL) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        deviations[i] = fabs(values[i] - stats.median);
+    }
+    if (gw_ntp_stats_calculate(deviations, count, &dev_stats) != 0) {
+        free(deviations);
+        return -1;
+    }
+    free(deviations);
+
+    *median_out = stats.median;
+    *mad_out = dev_stats.median;
+    return 0;
+}

@@ -18,4 +18,6 @@ int gw_ntp_stats_filter_outliers_median(
     int filtered_capacity,
     int *filtered_count);
 
+int gw_ntp_stats_mad(const double *values, int count, double *median_out, double *mad_out);
+
 #endif
