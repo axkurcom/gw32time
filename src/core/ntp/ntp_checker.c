@@ -147,6 +147,7 @@ int gw_ntp_checker_server(
     int interval_ms;
     int port;
     double outlier_threshold_ms;
+    double mad = 0.0;
 
     if (host == NULL || host[0] == '\0' || result == NULL) {
         return -1;
@@ -203,6 +204,9 @@ int gw_ntp_checker_server(
     if (gw_ntp_stats_calculate(filtered_offsets, filtered_count, &offset_stats) != 0) {
         return -1;
     }
+    if (gw_ntp_stats_mad(filtered_offsets, filtered_count, &result->offset_median_ms, &mad) != 0) {
+        mad = 0.0;
+    }
     if (gw_ntp_stats_calculate(delays, result->success_samples, &delay_stats) != 0) {
         return -1;
     }
@@ -210,6 +214,7 @@ int gw_ntp_checker_server(
     result->offset_median_ms = offset_stats.median;
     result->offset_mean_ms = offset_stats.mean;
     result->offset_stddev_ms = offset_stats.stddev;
+    result->offset_mad_ms = mad;
     result->delay_min_ms = delay_stats.min;
     result->delay_mean_ms = delay_stats.mean;
     result->jitter_ms = offset_stats.stddev;
@@ -251,5 +256,10 @@ int gw_ntp_checker_explain(
         sizeof(explain->lines[0]),
         "offset median %.2fms",
         result->offset_median_ms);
+    snprintf(
+        explain->lines[explain->count++],
+        sizeof(explain->lines[0]),
+        "offset mad %.2fms",
+        result->offset_mad_ms);
     return 0;
 }

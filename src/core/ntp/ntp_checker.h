@@ -42,6 +42,7 @@ typedef struct gw_ntp_checker_result {
     double offset_median_ms;
     double offset_mean_ms;
     double offset_stddev_ms;
+    double offset_mad_ms;
     double delay_min_ms;
     double delay_mean_ms;
     double jitter_ms;
