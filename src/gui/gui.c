@@ -44,9 +44,14 @@ typedef struct {
     wchar_t host[256];
     DWORD flags;
     int has_probe;
+    int success_samples;
+    int total_samples;
     int stratum;
     DWORD ping_ms;
+    double delay_ms;
     double offset_ms;
+    double jitter_ms;
+    double score;
     wchar_t ip[64];
     wchar_t ptr[256];
 } server_row_t;
@@ -75,9 +80,14 @@ typedef struct {
     wchar_t host[256];
     DWORD flags;
     int has_probe;
+    int success_samples;
+    int total_samples;
     int stratum;
     DWORD ping_ms;
+    double delay_ms;
     double offset_ms;
+    double jitter_ms;
+    double score;
     wchar_t ip[64];
     wchar_t ptr[256];
 } probe_result_msg_t;
@@ -877,11 +887,11 @@ static void init_servers_table(HWND dialog)
     HWND table = GetDlgItem(dialog, IDC_SERVERS_TABLE);
     LVCOLUMNW column;
     int i;
-    const wchar_t *titles[] = { L"Server", L"Flags", L"Stratum", L"Ping", L"Offset", L"IP", L"PTR" };
-    int widths[] = { 120, 118, 52, 56, 70, 84, 156 };
+    const wchar_t *titles[] = { L"Server", L"Flags", L"Reach", L"Delay", L"Offset", L"Jitter", L"Score", L"Stratum", L"IP", L"PTR" };
+    int widths[] = { 130, 118, 58, 64, 64, 62, 56, 52, 96, 136 };
 
     ListView_SetExtendedListViewStyle(table, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-    for (i = 0; i < 7; i++) {
+    for (i = 0; i < 10; i++) {
         ZeroMemory(&column, sizeof(column));
         column.mask = LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
         column.cx = widths[i];
@@ -911,23 +921,35 @@ static void server_row_to_table(HWND table, int row_index)
     ListView_SetItemText(table, row_index, 1, buf);
 
     if (g_rows[row_index].has_probe) {
-        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%d", g_rows[row_index].stratum);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%d/%d", g_rows[row_index].success_samples, g_rows[row_index].total_samples);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 2, buf);
-        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%lu ms", (unsigned long)g_rows[row_index].ping_ms);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.0f ms", g_rows[row_index].delay_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 3, buf);
         _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.0f ms", g_rows[row_index].offset_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 4, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.1f ms", g_rows[row_index].jitter_ms);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 5, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.2f", g_rows[row_index].score);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 6, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%d", g_rows[row_index].stratum);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 7, buf);
     } else {
         ListView_SetItemText(table, row_index, 2, L"-");
         ListView_SetItemText(table, row_index, 3, L"-");
         ListView_SetItemText(table, row_index, 4, L"-");
+        ListView_SetItemText(table, row_index, 5, L"-");
+        ListView_SetItemText(table, row_index, 6, L"-");
+        ListView_SetItemText(table, row_index, 7, L"-");
     }
 
-    ListView_SetItemText(table, row_index, 5, g_rows[row_index].ip[0] ? g_rows[row_index].ip : L"-");
-    ListView_SetItemText(table, row_index, 6, g_rows[row_index].ptr[0] ? g_rows[row_index].ptr : L"-");
+    ListView_SetItemText(table, row_index, 8, g_rows[row_index].ip[0] ? g_rows[row_index].ip : L"-");
+    ListView_SetItemText(table, row_index, 9, g_rows[row_index].ptr[0] ? g_rows[row_index].ptr : L"-");
 }
 
 static void refresh_servers_table(HWND dialog)
@@ -953,9 +975,14 @@ static void apply_probe_result(const probe_result_msg_t *msg)
     for (i = 0; i < g_row_count; i++) {
         if (_wcsicmp(g_rows[i].host, msg->host) == 0 && g_rows[i].flags == msg->flags) {
             g_rows[i].has_probe = msg->has_probe;
+            g_rows[i].success_samples = msg->success_samples;
+            g_rows[i].total_samples = msg->total_samples;
             g_rows[i].stratum = msg->stratum;
             g_rows[i].ping_ms = msg->ping_ms;
+            g_rows[i].delay_ms = msg->delay_ms;
             g_rows[i].offset_ms = msg->offset_ms;
+            g_rows[i].jitter_ms = msg->jitter_ms;
+            g_rows[i].score = msg->score;
             wcsncpy(g_rows[i].ip, msg->ip, (sizeof(g_rows[i].ip) / sizeof(g_rows[i].ip[0])) - 1);
             g_rows[i].ip[(sizeof(g_rows[i].ip) / sizeof(g_rows[i].ip[0])) - 1] = L'\0';
             wcsncpy(g_rows[i].ptr, msg->ptr, (sizeof(g_rows[i].ptr) / sizeof(g_rows[i].ptr[0])) - 1);
@@ -1043,6 +1070,12 @@ static void load_servers_from_config(const w32time_config_t *config)
         g_rows[g_row_count].host[(sizeof(g_rows[g_row_count].host) / sizeof(g_rows[g_row_count].host[0])) - 1] = L'\0';
         g_rows[g_row_count].flags = peers.peers[i].flags;
         g_rows[g_row_count].has_probe = 0;
+        g_rows[g_row_count].success_samples = 0;
+        g_rows[g_row_count].total_samples = 0;
+        g_rows[g_row_count].delay_ms = 0.0;
+        g_rows[g_row_count].offset_ms = 0.0;
+        g_rows[g_row_count].jitter_ms = 0.0;
+        g_rows[g_row_count].score = 0.0;
         g_rows[g_row_count].ip[0] = L'\0';
         g_rows[g_row_count].ptr[0] = L'\0';
         g_row_count++;
@@ -1730,16 +1763,26 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
                 gw_ntp_checker_server(host_utf8, &cfg, &result) == 0 &&
                 result.success_samples > 0) {
                 ctx->rows[i].has_probe = 1;
+                ctx->rows[i].success_samples = result.success_samples;
+                ctx->rows[i].total_samples = result.total_samples;
                 ctx->rows[i].stratum = result.stratum;
                 ctx->rows[i].ping_ms = result.delay_mean_ms > 0.0 ? (DWORD)result.delay_mean_ms : 0;
+                ctx->rows[i].delay_ms = result.delay_mean_ms;
                 ctx->rows[i].offset_ms = result.offset_median_ms;
+                ctx->rows[i].jitter_ms = result.jitter_ms;
+                ctx->rows[i].score = result.score;
             }
         }
 
         msg->has_probe = ctx->rows[i].has_probe;
+        msg->success_samples = ctx->rows[i].success_samples;
+        msg->total_samples = ctx->rows[i].total_samples;
         msg->stratum = ctx->rows[i].stratum;
         msg->ping_ms = ctx->rows[i].ping_ms;
+        msg->delay_ms = ctx->rows[i].delay_ms;
         msg->offset_ms = ctx->rows[i].offset_ms;
+        msg->jitter_ms = ctx->rows[i].jitter_ms;
+        msg->score = ctx->rows[i].score;
         wcsncpy(msg->ip, ctx->rows[i].ip, (sizeof(msg->ip) / sizeof(msg->ip[0])) - 1);
         msg->ip[(sizeof(msg->ip) / sizeof(msg->ip[0])) - 1] = L'\0';
         wcsncpy(msg->ptr, ctx->rows[i].ptr, (sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1);
