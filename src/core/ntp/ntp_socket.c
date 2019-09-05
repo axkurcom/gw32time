@@ -16,6 +16,75 @@ static int map_wsa_timeout(int rc)
     return 0;
 }
 
+static int try_endpoint(
+    const ADDRINFOA *endpoint,
+    int timeout_ms,
+    const gw_ntp_packet_t *request_template,
+    unsigned char response_raw[GW_NTP_PACKET_SIZE],
+    gw_clock_sample_t *t1,
+    gw_clock_sample_t *t4,
+    int *response_bytes,
+    gw_ntp_socket_error_t *error_out)
+{
+    SOCKET sock;
+    int sent;
+    int received;
+    unsigned char request_raw[GW_NTP_PACKET_SIZE];
+    gw_ntp_packet_t request_packet;
+
+    sock = socket(endpoint->ai_family, endpoint->ai_socktype, endpoint->ai_protocol);
+    if (sock == INVALID_SOCKET) {
+        if (error_out != NULL) {
+            *error_out = GW_NTP_SOCKET_CREATE;
+        }
+        return -1;
+    }
+
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+
+    if (gw_clock_sample_now(t1) != 0) {
+        if (error_out != NULL) {
+            *error_out = GW_NTP_SOCKET_IO;
+        }
+        closesocket(sock);
+        return -1;
+    }
+    request_packet = *request_template;
+    request_packet.transmit_timestamp = t1->ntp_wall_timestamp;
+    gw_ntp_packet_write(&request_packet, request_raw);
+
+    sent = sendto(sock, (const char *)request_raw, GW_NTP_PACKET_SIZE, 0, endpoint->ai_addr, (int)endpoint->ai_addrlen);
+    if (sent != GW_NTP_PACKET_SIZE) {
+        if (error_out != NULL) {
+            *error_out = map_wsa_timeout(sent) ? GW_NTP_SOCKET_TIMEOUT : GW_NTP_SOCKET_IO;
+        }
+        closesocket(sock);
+        return -1;
+    }
+
+    received = recvfrom(sock, (char *)response_raw, GW_NTP_PACKET_SIZE, 0, NULL, NULL);
+    if (gw_clock_sample_now(t4) != 0) {
+        if (error_out != NULL) {
+            *error_out = GW_NTP_SOCKET_IO;
+        }
+        closesocket(sock);
+        return -1;
+    }
+    closesocket(sock);
+
+    if (received <= 0) {
+        if (error_out != NULL) {
+            *error_out = map_wsa_timeout(received) ? GW_NTP_SOCKET_TIMEOUT : GW_NTP_SOCKET_IO;
+        }
+        return -1;
+    }
+    if (response_bytes != NULL) {
+        *response_bytes = received;
+    }
+    return 0;
+}
+
 int gw_ntp_socket_send_checker(
     const char *host,
     uint16_t port,
@@ -29,13 +98,10 @@ int gw_ntp_socket_send_checker(
     WSADATA wsa;
     ADDRINFOA hints;
     ADDRINFOA *resolved = NULL;
-    SOCKET sock = INVALID_SOCKET;
+    ADDRINFOA *it = NULL;
     char port_text[16];
-    unsigned char request_raw[GW_NTP_PACKET_SIZE];
     unsigned char response_raw[GW_NTP_PACKET_SIZE];
     gw_ntp_packet_t request_packet;
-    int sent;
-    int received = 0;
     int ok = -1;
 
     if (response_bytes != NULL) {
@@ -56,7 +122,7 @@ int gw_ntp_socket_send_checker(
     }
 
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     snprintf(port_text, sizeof(port_text), "%u", (unsigned)port);
@@ -69,52 +135,20 @@ int gw_ntp_socket_send_checker(
         goto cleanup;
     }
 
-    sock = socket(resolved->ai_family, resolved->ai_socktype, resolved->ai_protocol);
-    if (sock == INVALID_SOCKET) {
-        if (error_out != NULL) {
-            *error_out = GW_NTP_SOCKET_CREATE;
-        }
-        goto cleanup;
-    }
-
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
-
     gw_ntp_packet_init_request(&request_packet);
-    if (gw_clock_sample_now(t1) != 0) {
-        if (error_out != NULL) {
-            *error_out = GW_NTP_SOCKET_IO;
-        }
-        goto cleanup;
-    }
-    request_packet.transmit_timestamp = t1->ntp_wall_timestamp;
-    gw_ntp_packet_write(&request_packet, request_raw);
 
-    sent = sendto(sock, (const char *)request_raw, GW_NTP_PACKET_SIZE, 0, resolved->ai_addr, (int)resolved->ai_addrlen);
-    if (sent != GW_NTP_PACKET_SIZE) {
-        if (error_out != NULL) {
-            *error_out = map_wsa_timeout(sent) ? GW_NTP_SOCKET_TIMEOUT : GW_NTP_SOCKET_IO;
+    for (it = resolved; it != NULL; it = it->ai_next) {
+        if (it->ai_family != AF_INET && it->ai_family != AF_INET6) {
+            continue;
         }
+        if (try_endpoint(it, timeout_ms, &request_packet, response_raw, t1, t4, response_bytes, error_out) == 0) {
+            break;
+        }
+    }
+    if (it == NULL) {
         goto cleanup;
     }
-
-    received = recvfrom(sock, (char *)response_raw, sizeof(response_raw), 0, NULL, NULL);
-    if (gw_clock_sample_now(t4) != 0) {
-        if (error_out != NULL) {
-            *error_out = GW_NTP_SOCKET_IO;
-        }
-        goto cleanup;
-    }
-    if (received <= 0) {
-        if (error_out != NULL) {
-            *error_out = map_wsa_timeout(received) ? GW_NTP_SOCKET_TIMEOUT : GW_NTP_SOCKET_IO;
-        }
-        goto cleanup;
-    }
-    if (response_bytes != NULL) {
-        *response_bytes = received;
-    }
-    if (gw_ntp_packet_read(response_raw, received, response) != 0) {
+    if (gw_ntp_packet_read(response_raw, response_bytes != NULL ? *response_bytes : GW_NTP_PACKET_SIZE, response) != 0) {
         if (error_out != NULL) {
             *error_out = GW_NTP_SOCKET_IO;
         }
@@ -126,9 +160,6 @@ int gw_ntp_socket_send_checker(
     ok = 0;
 
 cleanup:
-    if (sock != INVALID_SOCKET) {
-        closesocket(sock);
-    }
     if (resolved != NULL) {
         FreeAddrInfoA(resolved);
     }
