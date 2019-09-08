@@ -999,6 +999,8 @@ static int resolve_ip_ptr(const wchar_t *host, wchar_t *ip, size_t ip_chars, wch
     WSADATA wsa;
     ADDRINFOW hints;
     ADDRINFOW *resolved = NULL;
+    ADDRINFOW *it;
+    ADDRINFOW *selected = NULL;
     DWORD ip_len;
     int rc;
 
@@ -1010,7 +1012,7 @@ static int resolve_ip_ptr(const wchar_t *host, wchar_t *ip, size_t ip_chars, wch
     }
 
     ZeroMemory(&hints, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     rc = GetAddrInfoW(host, L"123", &hints, &resolved);
@@ -1019,16 +1021,28 @@ static int resolve_ip_ptr(const wchar_t *host, wchar_t *ip, size_t ip_chars, wch
         return -1;
     }
 
+    for (it = resolved; it != NULL; it = it->ai_next) {
+        if (it->ai_family == AF_INET || it->ai_family == AF_INET6) {
+            selected = it;
+            break;
+        }
+    }
+    if (selected == NULL) {
+        FreeAddrInfoW(resolved);
+        WSACleanup();
+        return -1;
+    }
+
     ip_len = (DWORD)ip_chars;
-    if (WSAAddressToStringW(resolved->ai_addr, (DWORD)resolved->ai_addrlen, NULL, ip, &ip_len) != 0) {
+    if (WSAAddressToStringW(selected->ai_addr, (DWORD)selected->ai_addrlen, NULL, ip, &ip_len) != 0) {
         FreeAddrInfoW(resolved);
         WSACleanup();
         return -1;
     }
 
     if (GetNameInfoW(
-            resolved->ai_addr,
-            (DWORD)resolved->ai_addrlen,
+            selected->ai_addr,
+            (DWORD)selected->ai_addrlen,
             ptr,
             (DWORD)ptr_chars,
             NULL,
