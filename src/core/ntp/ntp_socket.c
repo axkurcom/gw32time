@@ -31,6 +31,8 @@ static int try_endpoint(
     int received;
     unsigned char request_raw[GW_NTP_PACKET_SIZE];
     gw_ntp_packet_t request_packet;
+    struct sockaddr_storage from_addr;
+    int from_len = sizeof(from_addr);
 
     sock = socket(endpoint->ai_family, endpoint->ai_socktype, endpoint->ai_protocol);
     if (sock == INVALID_SOCKET) {
@@ -63,7 +65,8 @@ static int try_endpoint(
         return -1;
     }
 
-    received = recvfrom(sock, (char *)response_raw, GW_NTP_PACKET_SIZE, 0, NULL, NULL);
+    memset(&from_addr, 0, sizeof(from_addr));
+    received = recvfrom(sock, (char *)response_raw, GW_NTP_PACKET_SIZE, 0, (struct sockaddr *)&from_addr, &from_len);
     if (gw_clock_sample_now(t4) != 0) {
         if (error_out != NULL) {
             *error_out = GW_NTP_SOCKET_IO;
@@ -76,6 +79,12 @@ static int try_endpoint(
     if (received <= 0) {
         if (error_out != NULL) {
             *error_out = map_wsa_timeout(received) ? GW_NTP_SOCKET_TIMEOUT : GW_NTP_SOCKET_IO;
+        }
+        return -1;
+    }
+    if (from_addr.ss_family != endpoint->ai_family) {
+        if (error_out != NULL) {
+            *error_out = GW_NTP_SOCKET_IO;
         }
         return -1;
     }
