@@ -109,6 +109,7 @@ int gw_ntp_socket_send_checker(
     ADDRINFOA *resolved = NULL;
     ADDRINFOA *it = NULL;
     char port_text[16];
+    char normalized_host[256];
     unsigned char response_raw[GW_NTP_PACKET_SIZE];
     gw_ntp_packet_t request_packet;
     int ok = -1;
@@ -121,6 +122,18 @@ int gw_ntp_socket_send_checker(
     }
     if (host == NULL || host[0] == '\0' || timeout_ms <= 0 || response == NULL || t1 == NULL || t4 == NULL) {
         return -1;
+    }
+    if (host[0] == '[') {
+        size_t n = strlen(host);
+        if (n > 2 && host[n - 1] == ']') {
+            size_t copy_len = n - 2;
+            if (copy_len >= sizeof(normalized_host)) {
+                copy_len = sizeof(normalized_host) - 1;
+            }
+            memcpy(normalized_host, host + 1, copy_len);
+            normalized_host[copy_len] = '\0';
+            host = normalized_host;
+        }
     }
 
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
