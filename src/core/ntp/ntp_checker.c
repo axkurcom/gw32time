@@ -87,7 +87,7 @@ int gw_ntp_checker_sample(
     sample->stratum = packet.stratum;
     gw_ntp_reference_id_to_text(packet.reference_id, sample->reference_id);
 
-    if (sample->mode != GW_NTP_MODE_SERVER && sample->mode != GW_NTP_MODE_BROADCAST) {
+    if (sample->mode != GW_NTP_MODE_SERVER) {
         sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
@@ -95,11 +95,23 @@ int gw_ntp_checker_sample(
         sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
+    if (sample->leap == 3) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
     if (sample->stratum == 0) {
         sample->error = GW_NTP_ERR_KISS_OF_DEATH;
         return 0;
     }
+    if (sample->stratum > 15) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
     if (packet.receive_timestamp == 0 || packet.transmit_timestamp == 0) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
+    if (sample->stratum > 1 && packet.reference_timestamp == 0) {
         sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
