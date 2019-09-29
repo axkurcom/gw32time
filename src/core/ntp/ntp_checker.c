@@ -111,7 +111,19 @@ int gw_ntp_checker_sample(
         sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
+    if (packet.originate_timestamp == 0 || packet.originate_timestamp != t1.ntp_wall_timestamp) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
     if (sample->stratum > 1 && packet.reference_timestamp == 0) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
+    if (packet.transmit_timestamp < packet.receive_timestamp) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
+    if (t4.ntp_wall_timestamp < t1.ntp_wall_timestamp) {
         sample->error = GW_NTP_ERR_INVALID_RESPONSE;
         return 0;
     }
@@ -122,6 +134,13 @@ int gw_ntp_checker_sample(
     t4_ms = gw_ntp_to_ms(t4.ntp_wall_timestamp);
     sample->offset_ms = ((t2_ms - t1_ms) + (t3_ms - t4_ms)) / 2.0;
     sample->delay_ms = (t4_ms - t1_ms) - (t3_ms - t2_ms);
+    if (sample->delay_ms < -1.0) {
+        sample->error = GW_NTP_ERR_INVALID_RESPONSE;
+        return 0;
+    }
+    if (sample->delay_ms < 0.0) {
+        sample->delay_ms = 0.0;
+    }
     sample->rtt_ms = gw_mono_diff_ms(t4.mono_ms, t1.mono_ms);
     sample->server_processing_ms = t3_ms - t2_ms;
     sample->error = GW_NTP_OK;
