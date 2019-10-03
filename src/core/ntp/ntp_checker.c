@@ -198,6 +198,7 @@ int gw_ntp_checker_server(
     result->total_samples = samples;
     strncpy(result->host, host, sizeof(result->host) - 1);
     result->host[sizeof(result->host) - 1] = '\0';
+    result->last_reference_id[0] = '\0';
 
     for (i = 0; i < samples; i++) {
         if (gw_ntp_checker_sample(host, timeout_ms, port, &sample) != 0) {
@@ -210,6 +211,8 @@ int gw_ntp_checker_server(
             result->success_samples++;
             result->stratum = sample.stratum;
         }
+        strncpy(result->last_reference_id, sample.reference_id, sizeof(result->last_reference_id) - 1);
+        result->last_reference_id[sizeof(result->last_reference_id) - 1] = '\0';
         if (i + 1 < samples && interval_ms > 0) {
             Sleep((DWORD)interval_ms);
         }
@@ -292,5 +295,12 @@ int gw_ntp_checker_explain(
         sizeof(explain->lines[0]),
         "offset mad %.2fms",
         result->offset_mad_ms);
+    if (result->last_error == GW_NTP_ERR_KISS_OF_DEATH && result->last_reference_id[0] != '\0') {
+        snprintf(
+            explain->lines[explain->count++],
+            sizeof(explain->lines[0]),
+            "kod/refid %s",
+            result->last_reference_id);
+    }
     return 0;
 }

@@ -36,6 +36,7 @@ typedef struct gw_ntp_checker_config {
 
 typedef struct gw_ntp_checker_result {
     char host[256];
+    char last_reference_id[8];
     int total_samples;
     int success_samples;
     double reachability;
