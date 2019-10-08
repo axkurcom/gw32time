@@ -49,9 +49,15 @@ typedef struct {
     int stratum;
     DWORD ping_ms;
     double delay_ms;
+    double delay_min_ms;
     double offset_ms;
+    double offset_mean_ms;
+    double offset_stddev_ms;
+    double offset_mad_ms;
     double jitter_ms;
     double score;
+    int last_error;
+    char last_reference_id[8];
     wchar_t ip[64];
     wchar_t ptr[256];
 } server_row_t;
@@ -85,9 +91,15 @@ typedef struct {
     int stratum;
     DWORD ping_ms;
     double delay_ms;
+    double delay_min_ms;
     double offset_ms;
+    double offset_mean_ms;
+    double offset_stddev_ms;
+    double offset_mad_ms;
     double jitter_ms;
     double score;
+    int last_error;
+    char last_reference_id[8];
     wchar_t ip[64];
     wchar_t ptr[256];
 } probe_result_msg_t;
@@ -137,6 +149,28 @@ static void set_text(HWND dialog, int id, const wchar_t *text)
 static int str_eq(const wchar_t *a, const wchar_t *b)
 {
     return a != NULL && b != NULL && wcscmp(a, b) == 0;
+}
+
+static const wchar_t *ntp_error_label(int err)
+{
+    switch (err) {
+    case GW_NTP_OK:
+        return L"OK";
+    case GW_NTP_ERR_DNS:
+        return L"DNS";
+    case GW_NTP_ERR_SOCKET:
+        return L"SOCKET";
+    case GW_NTP_ERR_TIMEOUT:
+        return L"TIMEOUT";
+    case GW_NTP_ERR_SHORT_PACKET:
+        return L"SHORT";
+    case GW_NTP_ERR_INVALID_RESPONSE:
+        return L"INVALID";
+    case GW_NTP_ERR_KISS_OF_DEATH:
+        return L"KOD";
+    default:
+        return L"UNKNOWN";
+    }
 }
 
 static int is_wspace(wchar_t ch)
@@ -887,11 +921,14 @@ static void init_servers_table(HWND dialog)
     HWND table = GetDlgItem(dialog, IDC_SERVERS_TABLE);
     LVCOLUMNW column;
     int i;
-    const wchar_t *titles[] = { L"Server", L"Flags", L"Reach", L"Delay", L"Offset", L"Jitter", L"Score", L"Stratum", L"IP", L"PTR" };
-    int widths[] = { 130, 118, 58, 64, 64, 62, 56, 52, 96, 136 };
+    const wchar_t *titles[] = {
+        L"Server", L"Flags", L"Reach", L"Delay", L"Dmin", L"Offset", L"Mean", L"Stddev", L"MAD", L"Jitter", L"Score",
+        L"Stratum", L"Valid", L"Reason", L"IP", L"PTR"
+    };
+    int widths[] = { 122, 112, 54, 58, 54, 58, 58, 58, 54, 56, 52, 48, 52, 76, 94, 130 };
 
     ListView_SetExtendedListViewStyle(table, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-    for (i = 0; i < 10; i++) {
+    for (i = 0; i < 16; i++) {
         ZeroMemory(&column, sizeof(column));
         column.mask = LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
         column.cx = widths[i];
@@ -905,6 +942,7 @@ static void server_row_to_table(HWND table, int row_index)
 {
     LVITEMW item;
     wchar_t buf[256];
+    wchar_t reason[64];
 
     ZeroMemory(&item, sizeof(item));
     item.mask = LVIF_TEXT;
@@ -927,18 +965,43 @@ static void server_row_to_table(HWND table, int row_index)
         _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.0f ms", g_rows[row_index].delay_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 3, buf);
-        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.0f ms", g_rows[row_index].offset_ms);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.0f ms", g_rows[row_index].delay_min_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 4, buf);
-        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.1f ms", g_rows[row_index].jitter_ms);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.0f ms", g_rows[row_index].offset_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 5, buf);
-        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.2f", g_rows[row_index].score);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.1f", g_rows[row_index].offset_mean_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 6, buf);
-        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%d", g_rows[row_index].stratum);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.1f", g_rows[row_index].offset_stddev_ms);
         buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
         ListView_SetItemText(table, row_index, 7, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.1f", g_rows[row_index].offset_mad_ms);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 8, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.1f ms", g_rows[row_index].jitter_ms);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 9, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%.2f", g_rows[row_index].score);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 10, buf);
+        _snwprintf(buf, sizeof(buf) / sizeof(buf[0]), L"%d", g_rows[row_index].stratum);
+        buf[(sizeof(buf) / sizeof(buf[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 11, buf);
+        ListView_SetItemText(table, row_index, 12, L"yes");
+        if (g_rows[row_index].last_error == GW_NTP_ERR_KISS_OF_DEATH && g_rows[row_index].last_reference_id[0] != '\0') {
+            wchar_t refid[16];
+            MultiByteToWideChar(CP_UTF8, 0, g_rows[row_index].last_reference_id, -1, refid, sizeof(refid) / sizeof(refid[0]));
+            refid[(sizeof(refid) / sizeof(refid[0])) - 1] = L'\0';
+            _snwprintf(reason, sizeof(reason) / sizeof(reason[0]), L"%ls(%ls)", ntp_error_label(g_rows[row_index].last_error), refid);
+            reason[(sizeof(reason) / sizeof(reason[0])) - 1] = L'\0';
+            ListView_SetItemText(table, row_index, 13, reason);
+        } else {
+            _snwprintf(reason, sizeof(reason) / sizeof(reason[0]), L"%ls", ntp_error_label(g_rows[row_index].last_error));
+            reason[(sizeof(reason) / sizeof(reason[0])) - 1] = L'\0';
+            ListView_SetItemText(table, row_index, 13, reason);
+        }
     } else {
         ListView_SetItemText(table, row_index, 2, L"-");
         ListView_SetItemText(table, row_index, 3, L"-");
@@ -946,10 +1009,18 @@ static void server_row_to_table(HWND table, int row_index)
         ListView_SetItemText(table, row_index, 5, L"-");
         ListView_SetItemText(table, row_index, 6, L"-");
         ListView_SetItemText(table, row_index, 7, L"-");
+        ListView_SetItemText(table, row_index, 8, L"-");
+        ListView_SetItemText(table, row_index, 9, L"-");
+        ListView_SetItemText(table, row_index, 10, L"-");
+        ListView_SetItemText(table, row_index, 11, L"-");
+        ListView_SetItemText(table, row_index, 12, L"no");
+        _snwprintf(reason, sizeof(reason) / sizeof(reason[0]), L"%ls", ntp_error_label(g_rows[row_index].last_error));
+        reason[(sizeof(reason) / sizeof(reason[0])) - 1] = L'\0';
+        ListView_SetItemText(table, row_index, 13, reason);
     }
 
-    ListView_SetItemText(table, row_index, 8, g_rows[row_index].ip[0] ? g_rows[row_index].ip : L"-");
-    ListView_SetItemText(table, row_index, 9, g_rows[row_index].ptr[0] ? g_rows[row_index].ptr : L"-");
+    ListView_SetItemText(table, row_index, 14, g_rows[row_index].ip[0] ? g_rows[row_index].ip : L"-");
+    ListView_SetItemText(table, row_index, 15, g_rows[row_index].ptr[0] ? g_rows[row_index].ptr : L"-");
 }
 
 static void refresh_servers_table(HWND dialog)
@@ -980,9 +1051,16 @@ static void apply_probe_result(const probe_result_msg_t *msg)
             g_rows[i].stratum = msg->stratum;
             g_rows[i].ping_ms = msg->ping_ms;
             g_rows[i].delay_ms = msg->delay_ms;
+            g_rows[i].delay_min_ms = msg->delay_min_ms;
             g_rows[i].offset_ms = msg->offset_ms;
+            g_rows[i].offset_mean_ms = msg->offset_mean_ms;
+            g_rows[i].offset_stddev_ms = msg->offset_stddev_ms;
+            g_rows[i].offset_mad_ms = msg->offset_mad_ms;
             g_rows[i].jitter_ms = msg->jitter_ms;
             g_rows[i].score = msg->score;
+            g_rows[i].last_error = msg->last_error;
+            strncpy(g_rows[i].last_reference_id, msg->last_reference_id, sizeof(g_rows[i].last_reference_id) - 1);
+            g_rows[i].last_reference_id[sizeof(g_rows[i].last_reference_id) - 1] = '\0';
             wcsncpy(g_rows[i].ip, msg->ip, (sizeof(g_rows[i].ip) / sizeof(g_rows[i].ip[0])) - 1);
             g_rows[i].ip[(sizeof(g_rows[i].ip) / sizeof(g_rows[i].ip[0])) - 1] = L'\0';
             wcsncpy(g_rows[i].ptr, msg->ptr, (sizeof(g_rows[i].ptr) / sizeof(g_rows[i].ptr[0])) - 1);
@@ -1087,9 +1165,15 @@ static void load_servers_from_config(const w32time_config_t *config)
         g_rows[g_row_count].success_samples = 0;
         g_rows[g_row_count].total_samples = 0;
         g_rows[g_row_count].delay_ms = 0.0;
+        g_rows[g_row_count].delay_min_ms = 0.0;
         g_rows[g_row_count].offset_ms = 0.0;
+        g_rows[g_row_count].offset_mean_ms = 0.0;
+        g_rows[g_row_count].offset_stddev_ms = 0.0;
+        g_rows[g_row_count].offset_mad_ms = 0.0;
         g_rows[g_row_count].jitter_ms = 0.0;
         g_rows[g_row_count].score = 0.0;
+        g_rows[g_row_count].last_error = GW_NTP_ERR_SOCKET;
+        g_rows[g_row_count].last_reference_id[0] = '\0';
         g_rows[g_row_count].ip[0] = L'\0';
         g_rows[g_row_count].ptr[0] = L'\0';
         g_row_count++;
@@ -1774,17 +1858,23 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
             cfg.interval_ms = 120;
 
             if (utf8_from_wide(ctx->rows[i].host, host_utf8, sizeof(host_utf8)) == 0 &&
-                gw_ntp_checker_server(host_utf8, &cfg, &result) == 0 &&
-                result.success_samples > 0) {
-                ctx->rows[i].has_probe = 1;
+                gw_ntp_checker_server(host_utf8, &cfg, &result) == 0) {
+                ctx->rows[i].has_probe = result.success_samples > 0;
                 ctx->rows[i].success_samples = result.success_samples;
                 ctx->rows[i].total_samples = result.total_samples;
                 ctx->rows[i].stratum = result.stratum;
                 ctx->rows[i].ping_ms = result.delay_mean_ms > 0.0 ? (DWORD)result.delay_mean_ms : 0;
                 ctx->rows[i].delay_ms = result.delay_mean_ms;
+                ctx->rows[i].delay_min_ms = result.delay_min_ms;
                 ctx->rows[i].offset_ms = result.offset_median_ms;
+                ctx->rows[i].offset_mean_ms = result.offset_mean_ms;
+                ctx->rows[i].offset_stddev_ms = result.offset_stddev_ms;
+                ctx->rows[i].offset_mad_ms = result.offset_mad_ms;
                 ctx->rows[i].jitter_ms = result.jitter_ms;
                 ctx->rows[i].score = result.score;
+                ctx->rows[i].last_error = result.last_error;
+                strncpy(ctx->rows[i].last_reference_id, result.last_reference_id, sizeof(ctx->rows[i].last_reference_id) - 1);
+                ctx->rows[i].last_reference_id[sizeof(ctx->rows[i].last_reference_id) - 1] = '\0';
             }
         }
 
@@ -1794,9 +1884,16 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
         msg->stratum = ctx->rows[i].stratum;
         msg->ping_ms = ctx->rows[i].ping_ms;
         msg->delay_ms = ctx->rows[i].delay_ms;
+        msg->delay_min_ms = ctx->rows[i].delay_min_ms;
         msg->offset_ms = ctx->rows[i].offset_ms;
+        msg->offset_mean_ms = ctx->rows[i].offset_mean_ms;
+        msg->offset_stddev_ms = ctx->rows[i].offset_stddev_ms;
+        msg->offset_mad_ms = ctx->rows[i].offset_mad_ms;
         msg->jitter_ms = ctx->rows[i].jitter_ms;
         msg->score = ctx->rows[i].score;
+        msg->last_error = ctx->rows[i].last_error;
+        strncpy(msg->last_reference_id, ctx->rows[i].last_reference_id, sizeof(msg->last_reference_id) - 1);
+        msg->last_reference_id[sizeof(msg->last_reference_id) - 1] = '\0';
         wcsncpy(msg->ip, ctx->rows[i].ip, (sizeof(msg->ip) / sizeof(msg->ip[0])) - 1);
         msg->ip[(sizeof(msg->ip) / sizeof(msg->ip[0])) - 1] = L'\0';
         wcsncpy(msg->ptr, ctx->rows[i].ptr, (sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1);
