@@ -1547,7 +1547,10 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
             char host_utf8[256];
             gw_ntp_checker_config_t cfg;
             gw_ntp_checker_result_t result;
-            wchar_t message[512];
+            gw_ntp_explain_t explain;
+            wchar_t message[2048];
+            int msg_len = 0;
+            int i;
 
             GetDlgItemTextW(dialog, IDC_DIALOG_SERVER, host, sizeof(host) / sizeof(host[0]));
             if (!trim_host_inplace(host)) {
@@ -1562,30 +1565,68 @@ static INT_PTR CALLBACK server_edit_dialog_proc(HWND dialog, UINT message, WPARA
             gw_ntp_checker_default_config(&cfg);
             cfg.timeout_ms = 1000;
             cfg.interval_ms = 120;
-            if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0 || result.success_samples <= 0) {
+            if (gw_ntp_checker_server(host_utf8, &cfg, &result) != 0) {
+                MessageBoxW(dialog, L"NTP checker failed.", L"GW32TIME", MB_ICONERROR);
+                return TRUE;
+            }
+
+            msg_len += _snwprintf(
+                message + msg_len,
+                (sizeof(message) / sizeof(message[0])) - msg_len,
+                L"NTP checker report\nHost: %ls\nReach: %d/%d\nOffset median: %.2f ms\nOffset mean: %.2f ms\nOffset stddev: %.2f ms\nOffset MAD: %.2f ms\nDelay mean: %.2f ms\nDelay min: %.2f ms\nJitter: %.2f ms\nScore: %.2f\nStratum: %d\nValidation: %ls",
+                host,
+                result.success_samples,
+                result.total_samples,
+                result.offset_median_ms,
+                result.offset_mean_ms,
+                result.offset_stddev_ms,
+                result.offset_mad_ms,
+                result.delay_mean_ms,
+                result.delay_min_ms,
+                result.jitter_ms,
+                result.score,
+                result.stratum,
+                ntp_error_label(result.last_error));
+
+            if (result.last_error == GW_NTP_ERR_KISS_OF_DEATH && result.last_reference_id[0] != '\0') {
+                wchar_t refid[16];
+                MultiByteToWideChar(CP_UTF8, 0, result.last_reference_id, -1, refid, sizeof(refid) / sizeof(refid[0]));
+                refid[(sizeof(refid) / sizeof(refid[0])) - 1] = L'\0';
+                msg_len += _snwprintf(
+                    message + msg_len,
+                    (sizeof(message) / sizeof(message[0])) - msg_len,
+                    L" (%ls)",
+                    refid);
+            }
+
+            if (gw_ntp_checker_explain(&result, &explain) == 0 && explain.count > 0) {
+                msg_len += _snwprintf(
+                    message + msg_len,
+                    (sizeof(message) / sizeof(message[0])) - msg_len,
+                    L"\n\nExplain:");
+                for (i = 0; i < explain.count && msg_len < (int)(sizeof(message) / sizeof(message[0])) - 4; i++) {
+                    wchar_t line_w[160];
+                    MultiByteToWideChar(CP_UTF8, 0, explain.lines[i], -1, line_w, sizeof(line_w) / sizeof(line_w[0]));
+                    line_w[(sizeof(line_w) / sizeof(line_w[0])) - 1] = L'\0';
+                    msg_len += _snwprintf(
+                        message + msg_len,
+                        (sizeof(message) / sizeof(message[0])) - msg_len,
+                        L"\n  %ls",
+                        line_w);
+                }
+            }
+
+            message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+            if (result.success_samples <= 0) {
                 _snwprintf(
-                    message,
-                    sizeof(message) / sizeof(message[0]),
-                    L"NTP checker failed.\nSuccess: %d/%d",
-                    result.success_samples,
-                    result.total_samples);
+                    message + wcslen(message),
+                    (sizeof(message) / sizeof(message[0])) - wcslen(message),
+                    L"\n\nNo successful samples.");
                 message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
                 MessageBoxW(dialog, message, L"GW32TIME", MB_ICONERROR);
                 return TRUE;
             }
 
-            _snwprintf(
-                message,
-                sizeof(message) / sizeof(message[0]),
-                L"NTP checker OK.\nReach: %d/%d\nOffset: %.2f ms\nDelay: %.2f ms\nJitter: %.2f ms\nScore: %.2f\nStratum: %d",
-                result.success_samples,
-                result.total_samples,
-                result.offset_median_ms,
-                result.delay_mean_ms,
-                result.jitter_ms,
-                result.score,
-                result.stratum);
-            message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
             MessageBoxW(dialog, message, L"GW32TIME", MB_ICONINFORMATION);
             return TRUE;
         }
