@@ -1939,9 +1939,14 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
         msg->ip[(sizeof(msg->ip) / sizeof(msg->ip[0])) - 1] = L'\0';
         wcsncpy(msg->ptr, ctx->rows[i].ptr, (sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1);
         msg->ptr[(sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1] = L'\0';
-        PostMessageW(ctx->dialog, WM_APP_PROBE_RESULT, 0, (LPARAM)msg);
+        if (!PostMessageW(ctx->dialog, WM_APP_PROBE_RESULT, 0, (LPARAM)msg)) {
+            free(msg);
+        }
     }
-    PostMessageW(ctx->dialog, WM_APP_PROBE_DONE, 0, (LPARAM)ctx);
+    if (!PostMessageW(ctx->dialog, WM_APP_PROBE_DONE, 0, (LPARAM)ctx)) {
+        free(ctx);
+        InterlockedExchange(&g_probe_running, 0);
+    }
     return 0;
 }
 
