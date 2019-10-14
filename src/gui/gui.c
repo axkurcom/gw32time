@@ -116,6 +116,7 @@ static HANDLE g_probe_thread = NULL;
 static HANDLE g_helper_pipe = INVALID_HANDLE_VALUE;
 static HANDLE g_helper_process = NULL;
 static LONG g_probe_running = 0;
+static LONG g_probe_shutdown_requested = 0;
 static int g_is_admin = 0;
 static int g_helper_uac_ok = 0;
 static HFONT g_bold_font = NULL;
@@ -1869,6 +1870,10 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
         if (msg == NULL) {
             continue;
         }
+        if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0) {
+            free(msg);
+            break;
+        }
 
         ZeroMemory(msg, sizeof(*msg));
         wcsncpy(msg->host, ctx->rows[i].host, (sizeof(msg->host) / sizeof(msg->host[0])) - 1);
@@ -1939,9 +1944,18 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
         msg->ip[(sizeof(msg->ip) / sizeof(msg->ip[0])) - 1] = L'\0';
         wcsncpy(msg->ptr, ctx->rows[i].ptr, (sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1);
         msg->ptr[(sizeof(msg->ptr) / sizeof(msg->ptr[0])) - 1] = L'\0';
+        if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0) {
+            free(msg);
+            break;
+        }
         if (!PostMessageW(ctx->dialog, WM_APP_PROBE_RESULT, 0, (LPARAM)msg)) {
             free(msg);
         }
+    }
+    if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0) {
+        free(ctx);
+        InterlockedExchange(&g_probe_running, 0);
+        return 0;
     }
     if (!PostMessageW(ctx->dialog, WM_APP_PROBE_DONE, 0, (LPARAM)ctx)) {
         free(ctx);
@@ -1958,6 +1972,7 @@ static void start_probe_all_async(HWND dialog)
     if (InterlockedCompareExchange(&g_probe_running, 1, 0) != 0) {
         return;
     }
+    InterlockedExchange(&g_probe_shutdown_requested, 0);
 
     if (g_row_count <= 0) {
         InterlockedExchange(&g_probe_running, 0);
@@ -2268,6 +2283,13 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             return FALSE;
         }
     case WM_DESTROY:
+        InterlockedExchange(&g_probe_shutdown_requested, 1);
+        if (g_probe_thread != NULL) {
+            WaitForSingleObject(g_probe_thread, INFINITE);
+            CloseHandle(g_probe_thread);
+            g_probe_thread = NULL;
+        }
+        InterlockedExchange(&g_probe_running, 0);
         close_elevated_helper();
         return TRUE;
     default:
