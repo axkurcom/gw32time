@@ -21,7 +21,11 @@ static int with_systemtime_privilege(BOOL enable)
     tp.PrivilegeCount = 1;
     tp.Privileges[0].Luid = luid;
     tp.Privileges[0].Attributes = enable ? SE_PRIVILEGE_ENABLED : 0;
+    SetLastError(ERROR_SUCCESS);
     ok = AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), NULL, NULL);
+    if (ok && GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
+        ok = FALSE;
+    }
     CloseHandle(token);
     return ok ? 0 : -1;
 }
