@@ -2011,6 +2011,7 @@ static void start_probe_all_async(HWND dialog)
 static void finish_probe_all_async(HWND dialog)
 {
     if (g_probe_thread != NULL) {
+        WaitForSingleObject(g_probe_thread, INFINITE);
         CloseHandle(g_probe_thread);
         g_probe_thread = NULL;
     }
