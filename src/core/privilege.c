@@ -9,6 +9,7 @@ int privilege_is_admin(int *out)
     BOOL is_member = FALSE;
     SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
     PSID admins = NULL;
+    DWORD last_error = ERROR_SUCCESS;
 
     if (out == NULL) {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -34,8 +35,10 @@ int privilege_is_admin(int *out)
     }
 
     if (!CheckTokenMembership(NULL, admins, &is_member)) {
+        last_error = GetLastError();
         error_print_last(L"CheckTokenMembership");
         FreeSid(admins);
+        SetLastError(last_error);
         return -1;
     }
 

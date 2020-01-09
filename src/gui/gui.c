@@ -425,6 +425,7 @@ static int ensure_elevated_helper(HWND dialog)
     wchar_t pipe_name[128];
     wchar_t params[192];
     SHELLEXECUTEINFOW sei;
+    DWORD last_error = ERROR_SUCCESS;
 
     if (g_helper_pipe != INVALID_HANDLE_VALUE) {
         if (g_helper_process == NULL || WaitForSingleObject(g_helper_process, 0) != WAIT_OBJECT_0) {
@@ -470,9 +471,11 @@ static int ensure_elevated_helper(HWND dialog)
     sei.lpParameters = params;
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei)) {
+        last_error = GetLastError();
         CloseHandle(g_helper_pipe);
         g_helper_pipe = INVALID_HANDLE_VALUE;
-        if (GetLastError() == ERROR_CANCELLED) {
+        SetLastError(last_error);
+        if (last_error == ERROR_CANCELLED) {
             return -2;
         }
         return -1;
@@ -483,11 +486,15 @@ static int ensure_elevated_helper(HWND dialog)
         return -1;
     }
 
-    if (!ConnectNamedPipe(g_helper_pipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
-        CloseHandle(g_helper_pipe);
-        g_helper_pipe = INVALID_HANDLE_VALUE;
-        CloseHandle(sei.hProcess);
-        return -1;
+    if (!ConnectNamedPipe(g_helper_pipe, NULL)) {
+        last_error = GetLastError();
+        if (last_error != ERROR_PIPE_CONNECTED) {
+            CloseHandle(g_helper_pipe);
+            g_helper_pipe = INVALID_HANDLE_VALUE;
+            CloseHandle(sei.hProcess);
+            SetLastError(last_error);
+            return -1;
+        }
     }
     g_helper_process = sei.hProcess;
     g_helper_uac_ok = 1;
