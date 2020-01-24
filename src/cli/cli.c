@@ -78,6 +78,52 @@ static int utf8_from_wide(const wchar_t *input, char *out, size_t out_len)
     return 0;
 }
 
+static void print_json_escaped_wide(const wchar_t *text)
+{
+    const wchar_t *p = text;
+
+    if (p == NULL) {
+        return;
+    }
+
+    while (*p != L'\0') {
+        wchar_t ch = *p++;
+        if (ch == L'\"') {
+            wprintf(L"\\\"");
+            continue;
+        }
+        if (ch == L'\\') {
+            wprintf(L"\\\\");
+            continue;
+        }
+        if (ch == L'\b') {
+            wprintf(L"\\b");
+            continue;
+        }
+        if (ch == L'\f') {
+            wprintf(L"\\f");
+            continue;
+        }
+        if (ch == L'\n') {
+            wprintf(L"\\n");
+            continue;
+        }
+        if (ch == L'\r') {
+            wprintf(L"\\r");
+            continue;
+        }
+        if (ch == L'\t') {
+            wprintf(L"\\t");
+            continue;
+        }
+        if (ch < 0x20) {
+            wprintf(L"\\u%04X", (unsigned int)ch);
+            continue;
+        }
+        wprintf(L"%lc", ch);
+    }
+}
+
 typedef struct checker_task {
     wchar_t host[256];
     char host_utf8[256];
@@ -252,7 +298,9 @@ static int checker_command(int argc, wchar_t **argv)
                 }
             }
             wprintf(L"  {\n");
-            wprintf(L"    \"server\": \"%ls\",\n", tasks[i].host);
+            wprintf(L"    \"server\": \"");
+            print_json_escaped_wide(tasks[i].host);
+            wprintf(L"\",\n");
             wprintf(L"    \"samples\": %d,\n", tasks[i].result.total_samples);
             wprintf(L"    \"success\": %d,\n", tasks[i].result.success_samples);
             wprintf(L"    \"reachability\": %.4f,\n", tasks[i].result.reachability);
