@@ -222,11 +222,17 @@ int ntp_parse_peer_list(const wchar_t *raw, ntp_peer_list_t *out)
 
         peer->flags = 0x8;
         if (comma < token_end) {
+            wchar_t *flags_end = NULL;
             if (copy_range(flags_buf, sizeof(flags_buf) / sizeof(flags_buf[0]), comma + 1, token_end) != 0) {
                 return -1;
             }
             if (flags_buf[0] != L'\0') {
-                peer->flags = (DWORD)wcstoul(flags_buf, NULL, 0);
+                unsigned long parsed_flags = wcstoul(flags_buf, &flags_end, 0);
+                if (flags_end == flags_buf || *flags_end != L'\0') {
+                    SetLastError(ERROR_INVALID_PARAMETER);
+                    return -1;
+                }
+                peer->flags = (DWORD)parsed_flags;
             }
         }
 
