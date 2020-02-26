@@ -23,6 +23,24 @@
 #include "../gui/gui.h"
 
 #define GW32TIME_VERSION L"0.0.1"
+#define HELPER_PROTO_MAX_FIELD_CHARS 1024
+
+enum {
+    HELPER_OP_EXIT = 0,
+    HELPER_OP_UAC_PING = 1,
+    HELPER_OP_SYNC_NOW = 2,
+    HELPER_OP_SET_TIME = 3,
+    HELPER_OP_APPLY_SERVERS = 4,
+    HELPER_OP_RESTORE_CONFIG = 5,
+    HELPER_OP_SERVICE = 6,
+    HELPER_OP_SET_POLL = 7
+};
+
+typedef struct {
+    DWORD opcode;
+    DWORD arg1_chars;
+    DWORD arg2_chars;
+} helper_frame_header_t;
 
 static int arg_is(const wchar_t *arg, const wchar_t *value)
 {
@@ -770,97 +788,76 @@ static int run_internal_uac_ping(void)
     return 0;
 }
 
-static wchar_t *helper_skip_space(wchar_t *p)
+static int pipe_write_all(HANDLE pipe, const void *buf, DWORD size)
 {
-    while (p != NULL && (*p == L' ' || *p == L'\t')) {
-        p++;
+    const unsigned char *p = (const unsigned char *)buf;
+    DWORD total = 0;
+
+    while (total < size) {
+        DWORD chunk = 0;
+        if (!WriteFile(pipe, p + total, size - total, &chunk, NULL) || chunk == 0) {
+            return -1;
+        }
+        total += chunk;
     }
-    return p;
+    return 0;
 }
 
-static wchar_t *helper_next_arg(wchar_t **cursor)
+static int pipe_read_all(HANDLE pipe, void *buf, DWORD size)
 {
-    wchar_t *start;
-    wchar_t *p;
+    unsigned char *p = (unsigned char *)buf;
+    DWORD total = 0;
 
-    if (cursor == NULL || *cursor == NULL) {
-        return NULL;
-    }
-    p = helper_skip_space(*cursor);
-    if (*p == L'\0') {
-        *cursor = p;
-        return NULL;
-    }
-    if (*p == L'"') {
-        p++;
-        start = p;
-        while (*p != L'\0' && *p != L'"') {
-            p++;
+    while (total < size) {
+        DWORD chunk = 0;
+        if (!ReadFile(pipe, p + total, size - total, &chunk, NULL) || chunk == 0) {
+            return -1;
         }
-        if (*p == L'"') {
-            *p = L'\0';
-            p++;
-        }
-        *cursor = p;
-        return start;
+        total += chunk;
     }
-    start = p;
-    while (*p != L'\0' && *p != L' ' && *p != L'\t') {
-        p++;
-    }
-    if (*p != L'\0') {
-        *p = L'\0';
-        p++;
-    }
-    *cursor = p;
-    return start;
+    return 0;
 }
 
-static int run_helper_command(wchar_t *command)
+static int run_helper_command_proto(DWORD opcode, const wchar_t *arg1, const wchar_t *arg2)
 {
-    wchar_t *cursor = command;
-    wchar_t *verb = helper_next_arg(&cursor);
     wchar_t *argv_local[5];
 
-    if (verb == NULL) {
-        return 2;
-    }
-    if (arg_is(verb, L"__uac-ping")) {
+    if (opcode == HELPER_OP_UAC_PING) {
         return run_internal_uac_ping();
     }
-    if (arg_is(verb, L"__sync-now")) {
+    if (opcode == HELPER_OP_SYNC_NOW) {
         return run_internal_sync_now();
     }
-    if (arg_is(verb, L"__set-time")) {
+    if (opcode == HELPER_OP_SET_TIME) {
         argv_local[0] = L"gw32time";
-        argv_local[1] = verb;
-        argv_local[2] = helper_next_arg(&cursor);
-        argv_local[3] = helper_next_arg(&cursor);
+        argv_local[1] = L"__set-time";
+        argv_local[2] = (wchar_t *)(arg1 != NULL ? arg1 : L"");
+        argv_local[3] = (wchar_t *)(arg2 != NULL ? arg2 : L"");
         return run_internal_set_time(4, argv_local);
     }
-    if (arg_is(verb, L"__apply-servers")) {
+    if (opcode == HELPER_OP_APPLY_SERVERS) {
         argv_local[0] = L"gw32time";
-        argv_local[1] = verb;
-        argv_local[2] = helper_next_arg(&cursor);
+        argv_local[1] = L"__apply-servers";
+        argv_local[2] = (wchar_t *)(arg1 != NULL ? arg1 : L"");
         return run_internal_apply_servers(3, argv_local);
     }
-    if (arg_is(verb, L"__restore-config")) {
+    if (opcode == HELPER_OP_RESTORE_CONFIG) {
         argv_local[0] = L"gw32time";
-        argv_local[1] = verb;
-        argv_local[2] = helper_next_arg(&cursor);
+        argv_local[1] = L"__restore-config";
+        argv_local[2] = (wchar_t *)(arg1 != NULL ? arg1 : L"");
         return run_internal_restore_config(3, argv_local);
     }
-    if (arg_is(verb, L"__svc")) {
+    if (opcode == HELPER_OP_SERVICE) {
         argv_local[0] = L"gw32time";
-        argv_local[1] = verb;
-        argv_local[2] = helper_next_arg(&cursor);
-        argv_local[3] = helper_next_arg(&cursor);
+        argv_local[1] = L"__svc";
+        argv_local[2] = (wchar_t *)(arg1 != NULL ? arg1 : L"");
+        argv_local[3] = (wchar_t *)(arg2 != NULL ? arg2 : NULL);
         return run_internal_service_cmd(argv_local[3] != NULL ? 4 : 3, argv_local);
     }
-    if (arg_is(verb, L"__set-poll")) {
+    if (opcode == HELPER_OP_SET_POLL) {
         argv_local[0] = L"gw32time";
-        argv_local[1] = verb;
-        argv_local[2] = helper_next_arg(&cursor);
+        argv_local[1] = L"__set-poll";
+        argv_local[2] = (wchar_t *)(arg1 != NULL ? arg1 : L"");
         return run_internal_set_poll(3, argv_local);
     }
     return 2;
@@ -869,9 +866,9 @@ static int run_helper_command(wchar_t *command)
 static int run_internal_helper_server(int argc, wchar_t **argv)
 {
     HANDLE pipe;
-    DWORD bytes_read;
-    DWORD bytes_written;
-    wchar_t command[2048];
+    helper_frame_header_t hdr;
+    wchar_t arg1[HELPER_PROTO_MAX_FIELD_CHARS + 1];
+    wchar_t arg2[HELPER_PROTO_MAX_FIELD_CHARS + 1];
     DWORD exit_code;
 
     if (argc < 3 || argv[2] == NULL || argv[2][0] == L'\0') {
@@ -884,18 +881,35 @@ static int run_internal_helper_server(int argc, wchar_t **argv)
     }
 
     for (;;) {
-        ZeroMemory(command, sizeof(command));
-        if (!ReadFile(pipe, command, sizeof(command) - sizeof(wchar_t), &bytes_read, NULL) || bytes_read == 0) {
+        ZeroMemory(&hdr, sizeof(hdr));
+        if (pipe_read_all(pipe, &hdr, sizeof(hdr)) != 0) {
             break;
         }
-        command[(sizeof(command) / sizeof(command[0])) - 1] = L'\0';
-        if (wcscmp(command, L"__exit") == 0) {
+        if (hdr.arg1_chars > HELPER_PROTO_MAX_FIELD_CHARS || hdr.arg2_chars > HELPER_PROTO_MAX_FIELD_CHARS) {
+            break;
+        }
+        arg1[0] = L'\0';
+        arg2[0] = L'\0';
+        if (hdr.arg1_chars > 0) {
+            if (pipe_read_all(pipe, arg1, hdr.arg1_chars * (DWORD)sizeof(wchar_t)) != 0) {
+                break;
+            }
+        }
+        if (hdr.arg2_chars > 0) {
+            if (pipe_read_all(pipe, arg2, hdr.arg2_chars * (DWORD)sizeof(wchar_t)) != 0) {
+                break;
+            }
+        }
+        arg1[hdr.arg1_chars] = L'\0';
+        arg2[hdr.arg2_chars] = L'\0';
+
+        if (hdr.opcode == HELPER_OP_EXIT) {
             exit_code = 0;
-            WriteFile(pipe, &exit_code, sizeof(exit_code), &bytes_written, NULL);
+            pipe_write_all(pipe, &exit_code, sizeof(exit_code));
             break;
         }
-        exit_code = (DWORD)run_helper_command(command);
-        if (!WriteFile(pipe, &exit_code, sizeof(exit_code), &bytes_written, NULL)) {
+        exit_code = (DWORD)run_helper_command_proto(hdr.opcode, arg1, arg2);
+        if (pipe_write_all(pipe, &exit_code, sizeof(exit_code)) != 0) {
             break;
         }
     }

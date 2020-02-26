@@ -39,6 +39,24 @@
 #define TIMER_SYNC_BURST 3
 #define REALTIME_MIN_SECONDS 1
 #define REALTIME_MAX_SECONDS 3600
+#define HELPER_PROTO_MAX_FIELD_CHARS 1024
+
+enum {
+    HELPER_OP_EXIT = 0,
+    HELPER_OP_UAC_PING = 1,
+    HELPER_OP_SYNC_NOW = 2,
+    HELPER_OP_SET_TIME = 3,
+    HELPER_OP_APPLY_SERVERS = 4,
+    HELPER_OP_RESTORE_CONFIG = 5,
+    HELPER_OP_SERVICE = 6,
+    HELPER_OP_SET_POLL = 7
+};
+
+typedef struct {
+    DWORD opcode;
+    DWORD arg1_chars;
+    DWORD arg2_chars;
+} helper_frame_header_t;
 
 typedef struct {
     wchar_t host[256];
@@ -135,7 +153,7 @@ static void restart_realtime_timer(HWND dialog);
 static int parse_realtime_seconds(HWND dialog);
 static void apply_probe_result(const probe_result_msg_t *msg);
 static void bump_main_window_layer(HWND dialog);
-static int run_elevated_helper(HWND dialog, const wchar_t *args);
+static int run_elevated_helper(HWND dialog, DWORD opcode, const wchar_t *arg1, const wchar_t *arg2);
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode);
 static void trigger_sync_probe_burst(HWND dialog);
 static void refresh_service_runtime(HWND dialog);
@@ -397,18 +415,79 @@ static void update_admin_controls(HWND dialog)
     }
 }
 
+static int pipe_write_all(HANDLE pipe, const void *buf, DWORD size)
+{
+    const unsigned char *p = (const unsigned char *)buf;
+    DWORD total = 0;
+
+    while (total < size) {
+        DWORD chunk = 0;
+        if (!WriteFile(pipe, p + total, size - total, &chunk, NULL) || chunk == 0) {
+            return -1;
+        }
+        total += chunk;
+    }
+    return 0;
+}
+
+static int pipe_read_all(HANDLE pipe, void *buf, DWORD size)
+{
+    unsigned char *p = (unsigned char *)buf;
+    DWORD total = 0;
+
+    while (total < size) {
+        DWORD chunk = 0;
+        if (!ReadFile(pipe, p + total, size - total, &chunk, NULL) || chunk == 0) {
+            return -1;
+        }
+        total += chunk;
+    }
+    return 0;
+}
+
+static int send_helper_request(HANDLE pipe, DWORD opcode, const wchar_t *arg1, const wchar_t *arg2, DWORD *exit_code)
+{
+    helper_frame_header_t hdr;
+    DWORD rc = 1;
+    size_t arg1_len = (arg1 != NULL) ? wcslen(arg1) : 0;
+    size_t arg2_len = (arg2 != NULL) ? wcslen(arg2) : 0;
+
+    if (arg1_len > HELPER_PROTO_MAX_FIELD_CHARS || arg2_len > HELPER_PROTO_MAX_FIELD_CHARS) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+
+    ZeroMemory(&hdr, sizeof(hdr));
+    hdr.opcode = opcode;
+    hdr.arg1_chars = (DWORD)arg1_len;
+    hdr.arg2_chars = (DWORD)arg2_len;
+
+    if (pipe_write_all(pipe, &hdr, sizeof(hdr)) != 0) {
+        return -1;
+    }
+    if (hdr.arg1_chars > 0 &&
+        pipe_write_all(pipe, arg1, hdr.arg1_chars * (DWORD)sizeof(wchar_t)) != 0) {
+        return -1;
+    }
+    if (hdr.arg2_chars > 0 &&
+        pipe_write_all(pipe, arg2, hdr.arg2_chars * (DWORD)sizeof(wchar_t)) != 0) {
+        return -1;
+    }
+    if (pipe_read_all(pipe, &rc, sizeof(rc)) != 0) {
+        return -1;
+    }
+    if (exit_code != NULL) {
+        *exit_code = rc;
+    }
+    return 0;
+}
+
 static void close_elevated_helper(void)
 {
-    DWORD written;
-    DWORD read;
     DWORD exit_code;
-    wchar_t command[2048];
 
     if (g_helper_pipe != INVALID_HANDLE_VALUE) {
-        ZeroMemory(command, sizeof(command));
-        wcsncpy(command, L"__exit", (sizeof(command) / sizeof(command[0])) - 1);
-        WriteFile(g_helper_pipe, command, sizeof(command), &written, NULL);
-        ReadFile(g_helper_pipe, &exit_code, sizeof(exit_code), &read, NULL);
+        send_helper_request(g_helper_pipe, HELPER_OP_EXIT, NULL, NULL, &exit_code);
         CloseHandle(g_helper_pipe);
         g_helper_pipe = INVALID_HANDLE_VALUE;
     }
@@ -501,32 +580,20 @@ static int ensure_elevated_helper(HWND dialog)
     return 0;
 }
 
-static int run_elevated_helper(HWND dialog, const wchar_t *args)
+static int run_elevated_helper(HWND dialog, DWORD opcode, const wchar_t *arg1, const wchar_t *arg2)
 {
-    wchar_t command[2048];
-    DWORD written;
-    DWORD read;
     DWORD exit_code = 1;
 
-    if (args == NULL || args[0] == L'\0') {
-        return -1;
-    }
     if (ensure_elevated_helper(dialog) != 0) {
         return -1;
     }
 
-    ZeroMemory(command, sizeof(command));
-    wcsncpy(command, args, (sizeof(command) / sizeof(command[0])) - 1);
-    if (!WriteFile(g_helper_pipe, command, sizeof(command), &written, NULL) ||
-        !ReadFile(g_helper_pipe, &exit_code, sizeof(exit_code), &read, NULL)) {
+    if (send_helper_request(g_helper_pipe, opcode, arg1, arg2, &exit_code) != 0) {
         close_elevated_helper();
         if (ensure_elevated_helper(dialog) != 0) {
             return -1;
         }
-        ZeroMemory(command, sizeof(command));
-        wcsncpy(command, args, (sizeof(command) / sizeof(command[0])) - 1);
-        if (!WriteFile(g_helper_pipe, command, sizeof(command), &written, NULL) ||
-            !ReadFile(g_helper_pipe, &exit_code, sizeof(exit_code), &read, NULL)) {
+        if (send_helper_request(g_helper_pipe, opcode, arg1, arg2, &exit_code) != 0) {
             close_elevated_helper();
             return -1;
         }
@@ -536,23 +603,17 @@ static int run_elevated_helper(HWND dialog, const wchar_t *args)
 
 static int run_elevated_set_time(HWND dialog, const SYSTEMTIME *st)
 {
-    wchar_t params[128];
+    wchar_t date_arg[32];
+    wchar_t time_arg[32];
 
     if (st == NULL) {
         return -1;
     }
-    _snwprintf(
-        params,
-        sizeof(params) / sizeof(params[0]),
-        L"__set-time %04u-%02u-%02u %02u:%02u:%02u",
-        (unsigned)st->wYear,
-        (unsigned)st->wMonth,
-        (unsigned)st->wDay,
-        (unsigned)st->wHour,
-        (unsigned)st->wMinute,
-        (unsigned)st->wSecond);
-    params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
-    return run_elevated_helper(dialog, params);
+    _snwprintf(date_arg, sizeof(date_arg) / sizeof(date_arg[0]), L"%04u-%02u-%02u", (unsigned)st->wYear, (unsigned)st->wMonth, (unsigned)st->wDay);
+    date_arg[(sizeof(date_arg) / sizeof(date_arg[0])) - 1] = L'\0';
+    _snwprintf(time_arg, sizeof(time_arg) / sizeof(time_arg[0]), L"%02u:%02u:%02u", (unsigned)st->wHour, (unsigned)st->wMinute, (unsigned)st->wSecond);
+    time_arg[(sizeof(time_arg) / sizeof(time_arg[0])) - 1] = L'\0';
+    return run_elevated_helper(dialog, HELPER_OP_SET_TIME, date_arg, time_arg);
 }
 
 static HFONT ensure_bold_font(void)
@@ -1241,7 +1302,7 @@ static void sync_now(HWND dialog)
     w32tm_raw_result_t result;
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        int rc = run_elevated_helper(dialog, L"__sync-now");
+        int rc = run_elevated_helper(dialog, HELPER_OP_SYNC_NOW, NULL, NULL);
         if (rc == -2) {
             return;
         }
@@ -1285,9 +1346,9 @@ static void apply_poll_interval(HWND dialog)
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
         wchar_t params[64];
         int rc;
-        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__set-poll %lu", (unsigned long)seconds);
+        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"%lu", (unsigned long)seconds);
         params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
-        rc = run_elevated_helper(dialog, params);
+        rc = run_elevated_helper(dialog, HELPER_OP_SET_POLL, params, NULL);
         if (rc == -2) {
             return;
         }
@@ -1332,15 +1393,7 @@ static int restart_reached_running_state(void)
 
 static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t *mode)
 {
-    wchar_t params[128];
     int is_admin = 0;
-
-    if (mode != NULL) {
-        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__svc %ls %ls", action, mode);
-    } else {
-        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__svc %ls", action);
-    }
-    params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
 
     if (privilege_is_admin(&is_admin) == 0 && is_admin) {
         if (str_eq(action, L"start")) {
@@ -1369,7 +1422,7 @@ static int run_service_action(HWND dialog, const wchar_t *action, const wchar_t 
         return 1;
     }
 
-    return run_elevated_helper(dialog, params);
+    return run_elevated_helper(dialog, HELPER_OP_SERVICE, action, mode);
 }
 
 static int choose_config_file(HWND dialog, wchar_t *path, DWORD chars, int save)
@@ -1478,10 +1531,7 @@ static void restore_config(HWND dialog)
     }
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        wchar_t params[MAX_PATH + 32];
-        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__restore-config \"%ls\"", path);
-        params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
-        if (run_elevated_helper(dialog, params) != 0) {
+        if (run_elevated_helper(dialog, HELPER_OP_RESTORE_CONFIG, path, NULL) != 0) {
             MessageBoxW(dialog, L"Configuration was restored, but service refresh failed.", L"GW32TIME", MB_ICONWARNING);
             refresh_status(dialog);
             return;
@@ -1842,10 +1892,7 @@ static void apply_servers(HWND dialog)
     }
 
     if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        wchar_t params[1200];
-        _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__apply-servers \"%ls\"", peerlist);
-        params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
-        if (run_elevated_helper(dialog, params) != 0) {
+        if (run_elevated_helper(dialog, HELPER_OP_APPLY_SERVERS, peerlist, NULL) != 0) {
             MessageBoxW(dialog, L"Failed to apply server list.", L"GW32TIME", MB_ICONERROR);
             return;
         }
@@ -2122,7 +2169,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         switch (LOWORD(wparam)) {
         case IDC_UAC_STATUS:
             if (HIWORD(wparam) == STN_CLICKED) {
-                int rc = run_elevated_helper(dialog, L"__uac-ping");
+                int rc = run_elevated_helper(dialog, HELPER_OP_UAC_PING, NULL, NULL);
                 if (rc == 0) {
                     refresh_datetime_block(dialog);
                 }
