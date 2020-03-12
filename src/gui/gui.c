@@ -2346,6 +2346,10 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         }
         InterlockedExchange(&g_probe_running, 0);
         close_elevated_helper();
+        if (g_bold_font != NULL) {
+            DeleteObject(g_bold_font);
+            g_bold_font = NULL;
+        }
         return TRUE;
     default:
         return FALSE;
