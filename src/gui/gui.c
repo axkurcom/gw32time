@@ -40,6 +40,7 @@
 #define REALTIME_MIN_SECONDS 1
 #define REALTIME_MAX_SECONDS 3600
 #define HELPER_PROTO_MAX_FIELD_CHARS 1024
+#define HELPER_EXIT_REPLY_TIMEOUT_MS 800
 
 enum {
     HELPER_OP_EXIT = 0,
@@ -482,12 +483,40 @@ static int send_helper_request(HANDLE pipe, DWORD opcode, const wchar_t *arg1, c
     return 0;
 }
 
+static void try_send_helper_exit_nohang(void)
+{
+    helper_frame_header_t hdr;
+    DWORD exit_code = 0;
+    DWORD available = 0;
+    DWORD waited = 0;
+
+    if (g_helper_pipe == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    ZeroMemory(&hdr, sizeof(hdr));
+    hdr.opcode = HELPER_OP_EXIT;
+    if (pipe_write_all(g_helper_pipe, &hdr, sizeof(hdr)) != 0) {
+        return;
+    }
+
+    while (waited < HELPER_EXIT_REPLY_TIMEOUT_MS) {
+        if (PeekNamedPipe(g_helper_pipe, NULL, 0, NULL, &available, NULL) && available >= sizeof(exit_code)) {
+            pipe_read_all(g_helper_pipe, &exit_code, sizeof(exit_code));
+            return;
+        }
+        if (g_helper_process != NULL && WaitForSingleObject(g_helper_process, 0) == WAIT_OBJECT_0) {
+            return;
+        }
+        Sleep(20);
+        waited += 20;
+    }
+}
+
 static void close_elevated_helper(void)
 {
-    DWORD exit_code;
-
     if (g_helper_pipe != INVALID_HANDLE_VALUE) {
-        send_helper_request(g_helper_pipe, HELPER_OP_EXIT, NULL, NULL, &exit_code);
+        try_send_helper_exit_nohang();
         CloseHandle(g_helper_pipe);
         g_helper_pipe = INVALID_HANDLE_VALUE;
     }
