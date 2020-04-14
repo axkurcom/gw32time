@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <wincrypt.h>
+#include <aclapi.h>
 
 #include "resource.h"
 #include "../core/config_file.h"
@@ -160,6 +162,148 @@ static void trigger_sync_probe_burst(HWND dialog);
 static void refresh_service_runtime(HWND dialog);
 static void apply_poll_interval(HWND dialog);
 static void close_elevated_helper(void);
+static int random_bytes(unsigned char *buf, DWORD size);
+static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out);
+static int verify_helper_pipe_client(HANDLE pipe, HANDLE helper_process);
+
+static int random_bytes(unsigned char *buf, DWORD size)
+{
+    HCRYPTPROV prov = 0;
+
+    if (buf == NULL || size == 0) {
+        return -1;
+    }
+    if (!CryptAcquireContextW(&prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
+        return -1;
+    }
+    if (!CryptGenRandom(prov, size, buf)) {
+        CryptReleaseContext(prov, 0);
+        return -1;
+    }
+    CryptReleaseContext(prov, 0);
+    return 0;
+}
+
+static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out)
+{
+    HANDLE token = NULL;
+    DWORD token_size = 0;
+    TOKEN_USER *token_user = NULL;
+    EXPLICIT_ACCESSW ea;
+    PACL acl = NULL;
+    PSID sid = NULL;
+    DWORD rc;
+
+    if (sa == NULL || acl_out == NULL || sid_out == NULL) {
+        return -1;
+    }
+    *acl_out = NULL;
+    *sid_out = NULL;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return -1;
+    }
+    GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
+    if (token_size == 0) {
+        CloseHandle(token);
+        return -1;
+    }
+    token_user = (TOKEN_USER *)malloc(token_size);
+    if (token_user == NULL) {
+        CloseHandle(token);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return -1;
+    }
+    if (!GetTokenInformation(token, TokenUser, token_user, token_size, &token_size)) {
+        free(token_user);
+        CloseHandle(token);
+        return -1;
+    }
+    sid = (PSID)malloc(GetLengthSid(token_user->User.Sid));
+    if (sid == NULL) {
+        free(token_user);
+        CloseHandle(token);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return -1;
+    }
+    if (!CopySid(GetLengthSid(token_user->User.Sid), sid, token_user->User.Sid)) {
+        free(sid);
+        free(token_user);
+        CloseHandle(token);
+        return -1;
+    }
+    ZeroMemory(&ea, sizeof(ea));
+    ea.grfAccessPermissions = GENERIC_ALL;
+    ea.grfAccessMode = SET_ACCESS;
+    ea.grfInheritance = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    ea.Trustee.ptstrName = (LPWSTR)sid;
+    rc = SetEntriesInAclW(1, &ea, NULL, &acl);
+    free(token_user);
+    CloseHandle(token);
+    if (rc != ERROR_SUCCESS) {
+        free(sid);
+        SetLastError(rc);
+        return -1;
+    }
+
+    ZeroMemory(sa, sizeof(*sa));
+    sa->nLength = sizeof(*sa);
+    sa->bInheritHandle = FALSE;
+    sa->lpSecurityDescriptor = LocalAlloc(LPTR, SECURITY_DESCRIPTOR_MIN_LENGTH);
+    if (sa->lpSecurityDescriptor == NULL) {
+        LocalFree(acl);
+        free(sid);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return -1;
+    }
+    if (!InitializeSecurityDescriptor(sa->lpSecurityDescriptor, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorDacl(sa->lpSecurityDescriptor, TRUE, acl, FALSE)) {
+        LocalFree(sa->lpSecurityDescriptor);
+        sa->lpSecurityDescriptor = NULL;
+        LocalFree(acl);
+        free(sid);
+        return -1;
+    }
+
+    *acl_out = acl;
+    *sid_out = sid;
+    return 0;
+}
+
+static int verify_helper_pipe_client(HANDLE pipe, HANDLE helper_process)
+{
+    HMODULE k32;
+    BOOL(WINAPI *fn_get_client_pid)(HANDLE, PULONG);
+    ULONG client_pid = 0;
+    DWORD helper_pid;
+
+    if (pipe == NULL || pipe == INVALID_HANDLE_VALUE || helper_process == NULL) {
+        return -1;
+    }
+    k32 = GetModuleHandleW(L"kernel32.dll");
+    if (k32 == NULL) {
+        return -1;
+    }
+    fn_get_client_pid = (BOOL(WINAPI *)(HANDLE, PULONG))GetProcAddress(k32, "GetNamedPipeClientProcessId");
+    if (fn_get_client_pid == NULL) {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+        return -1;
+    }
+    helper_pid = GetProcessId(helper_process);
+    if (helper_pid == 0) {
+        return -1;
+    }
+    if (!fn_get_client_pid(pipe, &client_pid)) {
+        return -1;
+    }
+    if ((DWORD)client_pid != helper_pid) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return -1;
+    }
+    return 0;
+}
 
 static void set_text(HWND dialog, int id, const wchar_t *text)
 {
@@ -530,8 +674,12 @@ static void close_elevated_helper(void)
 static int ensure_elevated_helper(HWND dialog)
 {
     wchar_t exe_path[MAX_PATH];
-    wchar_t pipe_name[128];
+    wchar_t pipe_name[160];
     wchar_t params[192];
+    SECURITY_ATTRIBUTES sa;
+    PACL pipe_acl = NULL;
+    PSID pipe_sid = NULL;
+    unsigned char nonce[8];
     SHELLEXECUTEINFOW sei;
     DWORD last_error = ERROR_SUCCESS;
 
@@ -547,15 +695,28 @@ static int ensure_elevated_helper(HWND dialog)
     if (GetModuleFileNameW(NULL, exe_path, sizeof(exe_path) / sizeof(exe_path[0])) == 0) {
         return -1;
     }
+    if (random_bytes(nonce, sizeof(nonce)) != 0) {
+        return -1;
+    }
     _snwprintf(
         pipe_name,
         sizeof(pipe_name) / sizeof(pipe_name[0]),
-        L"\\\\.\\pipe\\gw32time-helper-%lu-%lu",
+        L"\\\\.\\pipe\\gw32time-helper-%lu-%02X%02X%02X%02X%02X%02X%02X%02X",
         (unsigned long)GetCurrentProcessId(),
-        (unsigned long)GetTickCount());
+        (unsigned)nonce[0],
+        (unsigned)nonce[1],
+        (unsigned)nonce[2],
+        (unsigned)nonce[3],
+        (unsigned)nonce[4],
+        (unsigned)nonce[5],
+        (unsigned)nonce[6],
+        (unsigned)nonce[7]);
     pipe_name[(sizeof(pipe_name) / sizeof(pipe_name[0])) - 1] = L'\0';
     _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__helper \"%ls\"", pipe_name);
     params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
+    if (current_user_pipe_sa(&sa, &pipe_acl, &pipe_sid) != 0) {
+        return -1;
+    }
 
     g_helper_pipe = CreateNamedPipeW(
         pipe_name,
@@ -565,7 +726,14 @@ static int ensure_elevated_helper(HWND dialog)
         sizeof(DWORD),
         2048 * sizeof(wchar_t),
         0,
-        NULL);
+        &sa);
+    LocalFree(sa.lpSecurityDescriptor);
+    if (pipe_acl != NULL) {
+        LocalFree(pipe_acl);
+    }
+    if (pipe_sid != NULL) {
+        free(pipe_sid);
+    }
     if (g_helper_pipe == INVALID_HANDLE_VALUE) {
         return -1;
     }
@@ -603,6 +771,14 @@ static int ensure_elevated_helper(HWND dialog)
             SetLastError(last_error);
             return -1;
         }
+    }
+    if (verify_helper_pipe_client(g_helper_pipe, sei.hProcess) != 0) {
+        last_error = GetLastError();
+        CloseHandle(g_helper_pipe);
+        g_helper_pipe = INVALID_HANDLE_VALUE;
+        CloseHandle(sei.hProcess);
+        SetLastError(last_error);
+        return -1;
     }
     g_helper_process = sei.hProcess;
     g_helper_uac_ok = 1;
