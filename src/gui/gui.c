@@ -162,6 +162,7 @@ static void trigger_sync_probe_burst(HWND dialog);
 static void refresh_service_runtime(HWND dialog);
 static void apply_poll_interval(HWND dialog);
 static void close_elevated_helper(void);
+static void drain_probe_messages(HWND dialog);
 static int random_bytes(unsigned char *buf, DWORD size);
 static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out);
 static int verify_helper_pipe_client(HANDLE pipe, HANDLE helper_process);
@@ -2279,6 +2280,25 @@ static void finish_probe_all_async(HWND dialog)
     EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
 }
 
+static void drain_probe_messages(HWND dialog)
+{
+    MSG msg;
+
+    if (dialog == NULL) {
+        return;
+    }
+    while (PeekMessageW(&msg, dialog, WM_APP_PROBE_RESULT, WM_APP_PROBE_RESULT, PM_REMOVE)) {
+        if (msg.lParam != 0) {
+            free((probe_result_msg_t *)msg.lParam);
+        }
+    }
+    while (PeekMessageW(&msg, dialog, WM_APP_PROBE_DONE, WM_APP_PROBE_DONE, PM_REMOVE)) {
+        if (msg.lParam != 0) {
+            free((probe_run_ctx_t *)msg.lParam);
+        }
+    }
+}
+
 static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
 {
     (void)lparam;
@@ -2550,6 +2570,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             g_probe_thread = NULL;
         }
         InterlockedExchange(&g_probe_running, 0);
+        drain_probe_messages(dialog);
         close_elevated_helper();
         if (g_bold_font != NULL) {
             DeleteObject(g_bold_font);
