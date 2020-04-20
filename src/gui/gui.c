@@ -127,6 +127,7 @@ typedef struct {
 
 typedef struct {
     HWND dialog;
+    HANDLE cancel_event;
     int count;
     server_row_t rows[SERVER_MAX_ROWS];
 } probe_run_ctx_t;
@@ -134,6 +135,7 @@ typedef struct {
 static HINSTANCE g_instance;
 static HWND g_main_dialog = NULL;
 static HANDLE g_probe_thread = NULL;
+static probe_run_ctx_t *g_probe_ctx = NULL;
 static HANDLE g_helper_pipe = INVALID_HANDLE_VALUE;
 static HANDLE g_helper_process = NULL;
 static LONG g_probe_running = 0;
@@ -163,6 +165,8 @@ static void refresh_service_runtime(HWND dialog);
 static void apply_poll_interval(HWND dialog);
 static void close_elevated_helper(void);
 static void drain_probe_messages(HWND dialog);
+static void request_probe_cancel(void);
+static void wait_probe_thread_briefly(void);
 static int random_bytes(unsigned char *buf, DWORD size);
 static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out);
 static int verify_helper_pipe_client(HANDLE pipe, HANDLE helper_process);
@@ -2126,11 +2130,16 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
     }
 
     for (i = 0; i < ctx->count; i++) {
+        if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0 ||
+            (ctx->cancel_event != NULL && WaitForSingleObject(ctx->cancel_event, 0) == WAIT_OBJECT_0)) {
+            break;
+        }
         probe_result_msg_t *msg = (probe_result_msg_t *)malloc(sizeof(probe_result_msg_t));
         if (msg == NULL) {
             continue;
         }
-        if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0) {
+        if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0 ||
+            (ctx->cancel_event != NULL && WaitForSingleObject(ctx->cancel_event, 0) == WAIT_OBJECT_0)) {
             free(msg);
             break;
         }
@@ -2163,6 +2172,10 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
             cfg.timeout_ms = 900;
             cfg.interval_ms = 120;
 
+            if (ctx->cancel_event != NULL && WaitForSingleObject(ctx->cancel_event, 0) == WAIT_OBJECT_0) {
+                free(msg);
+                break;
+            }
             if (utf8_from_wide(ctx->rows[i].host, host_utf8, sizeof(host_utf8)) == 0 &&
                 gw_ntp_checker_server(host_utf8, &cfg, &result) == 0) {
                 ctx->rows[i].has_probe = result.success_samples > 0;
@@ -2212,12 +2225,18 @@ static DWORD WINAPI probe_all_thread_proc(LPVOID param)
             free(msg);
         }
     }
+    if (ctx->cancel_event != NULL) {
+        CloseHandle(ctx->cancel_event);
+        ctx->cancel_event = NULL;
+    }
     if (InterlockedCompareExchange(&g_probe_shutdown_requested, 0, 0) != 0) {
+        g_probe_ctx = NULL;
         free(ctx);
         InterlockedExchange(&g_probe_running, 0);
         return 0;
     }
     if (!PostMessageW(ctx->dialog, WM_APP_PROBE_DONE, 0, (LPARAM)ctx)) {
+        g_probe_ctx = NULL;
         free(ctx);
         InterlockedExchange(&g_probe_running, 0);
     }
@@ -2253,6 +2272,15 @@ static void start_probe_all_async(HWND dialog)
 
     ZeroMemory(ctx, sizeof(*ctx));
     ctx->dialog = dialog;
+    ctx->cancel_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (ctx->cancel_event == NULL) {
+        free(ctx);
+        InterlockedExchange(&g_probe_running, 0);
+        SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
+        EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
+        MessageBoxW(dialog, L"Could not allocate probe cancel event.", L"GW32TIME", MB_ICONERROR);
+        return;
+    }
     ctx->count = g_row_count;
     for (i = 0; i < g_row_count; i++) {
         ctx->rows[i] = g_rows[i];
@@ -2260,11 +2288,15 @@ static void start_probe_all_async(HWND dialog)
 
     g_probe_thread = CreateThread(NULL, 0, probe_all_thread_proc, ctx, 0, NULL);
     if (g_probe_thread == NULL) {
+        CloseHandle(ctx->cancel_event);
+        ctx->cancel_event = NULL;
         free(ctx);
         InterlockedExchange(&g_probe_running, 0);
         SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
         EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
         MessageBoxW(dialog, L"Could not start background probe.", L"GW32TIME", MB_ICONERROR);
+    } else {
+        g_probe_ctx = ctx;
     }
 }
 
@@ -2275,9 +2307,31 @@ static void finish_probe_all_async(HWND dialog)
         CloseHandle(g_probe_thread);
         g_probe_thread = NULL;
     }
+    g_probe_ctx = NULL;
     InterlockedExchange(&g_probe_running, 0);
     SetWindowTextW(GetDlgItem(dialog, IDC_PROBE_ALL), L"Check Servers");
     EnableWindow(GetDlgItem(dialog, IDC_PROBE_ALL), TRUE);
+}
+
+static void request_probe_cancel(void)
+{
+    InterlockedExchange(&g_probe_shutdown_requested, 1);
+    if (g_probe_ctx != NULL && g_probe_ctx->cancel_event != NULL) {
+        SetEvent(g_probe_ctx->cancel_event);
+    }
+}
+
+static void wait_probe_thread_briefly(void)
+{
+    if (g_probe_thread == NULL) {
+        return;
+    }
+    if (WaitForSingleObject(g_probe_thread, 1200) == WAIT_OBJECT_0) {
+        CloseHandle(g_probe_thread);
+        g_probe_thread = NULL;
+        g_probe_ctx = NULL;
+        InterlockedExchange(&g_probe_running, 0);
+    }
 }
 
 static void drain_probe_messages(HWND dialog)
@@ -2531,8 +2585,8 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         case IDC_EXIT:
         case IDCANCEL:
             if (g_probe_running != 0) {
-                MessageBoxW(dialog, L"Probe is still running in background.", L"GW32TIME", MB_ICONINFORMATION);
-                return TRUE;
+                request_probe_cancel();
+                wait_probe_thread_briefly();
             }
             KillTimer(dialog, TIMER_CLOCK);
             KillTimer(dialog, TIMER_REALTIME_CHECK);
@@ -2563,11 +2617,14 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
             return FALSE;
         }
     case WM_DESTROY:
-        InterlockedExchange(&g_probe_shutdown_requested, 1);
+        request_probe_cancel();
         if (g_probe_thread != NULL) {
-            WaitForSingleObject(g_probe_thread, INFINITE);
-            CloseHandle(g_probe_thread);
-            g_probe_thread = NULL;
+            wait_probe_thread_briefly();
+            if (g_probe_thread != NULL) {
+                CloseHandle(g_probe_thread);
+                g_probe_thread = NULL;
+                g_probe_ctx = NULL;
+            }
         }
         InterlockedExchange(&g_probe_running, 0);
         drain_probe_messages(dialog);
