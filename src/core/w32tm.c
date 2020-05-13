@@ -4,6 +4,8 @@
 #include <string.h>
 #include <wchar.h>
 
+#define PROCESS_CAPTURE_TIMEOUT_MS 30000
+
 static int append_bytes(char *dst, DWORD capacity, DWORD *used, const char *src, DWORD src_len)
 {
     DWORD room;
@@ -75,12 +77,14 @@ int run_process_capture(const wchar_t *cmdline, wchar_t *stdout_buf, size_t stdo
     PROCESS_INFORMATION pi;
     HANDLE read_pipe = NULL;
     HANDLE write_pipe = NULL;
+    HANDLE stdin_null = NULL;
     wchar_t *cmd_copy;
     size_t cmd_chars;
     char *raw;
     DWORD raw_capacity;
     DWORD raw_used = 0;
     DWORD last_error = ERROR_SUCCESS;
+    DWORD start_tick = 0;
     int result = -1;
 
     if (cmdline == NULL || stdout_buf == NULL || stdout_chars == 0 || exit_code == NULL) {
@@ -127,11 +131,25 @@ int run_process_capture(const wchar_t *cmdline, wchar_t *stdout_buf, size_t stdo
         goto done;
     }
 
+    stdin_null = CreateFileW(
+        L"NUL",
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &sa,
+        OPEN_EXISTING,
+        0,
+        NULL);
+    if (stdin_null == INVALID_HANDLE_VALUE) {
+        stdin_null = NULL;
+        last_error = GetLastError();
+        goto done;
+    }
+
     memset(&si, 0, sizeof(si));
     memset(&pi, 0, sizeof(pi));
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdInput = stdin_null;
     si.hStdOutput = write_pipe;
     si.hStdError = write_pipe;
 
@@ -153,28 +171,60 @@ int run_process_capture(const wchar_t *cmdline, wchar_t *stdout_buf, size_t stdo
     CloseHandle(write_pipe);
     write_pipe = NULL;
 
+    start_tick = GetTickCount();
     for (;;) {
         char chunk[512];
+        DWORD available = 0;
         DWORD bytes_read = 0;
-        BOOL ok = ReadFile(read_pipe, chunk, sizeof(chunk), &bytes_read, NULL);
+        DWORD wait_rc;
 
-        if (!ok || bytes_read == 0) {
-            break;
+        for (;;) {
+            if (!PeekNamedPipe(read_pipe, NULL, 0, NULL, &available, NULL)) {
+                DWORD peek_err = GetLastError();
+                if (peek_err == ERROR_BROKEN_PIPE) {
+                    available = 0;
+                    break;
+                }
+                last_error = peek_err;
+                goto done;
+            }
+            if (available == 0) {
+                break;
+            }
+            if (!ReadFile(read_pipe, chunk, available < sizeof(chunk) ? available : sizeof(chunk), &bytes_read, NULL) ||
+                bytes_read == 0) {
+                DWORD read_err = GetLastError();
+                if (read_err == ERROR_BROKEN_PIPE) {
+                    break;
+                }
+                last_error = read_err;
+                goto done;
+            }
+            append_bytes(raw, raw_capacity, &raw_used, chunk, bytes_read);
         }
 
-        append_bytes(raw, raw_capacity, &raw_used, chunk, bytes_read);
+        wait_rc = WaitForSingleObject(pi.hProcess, 0);
+        if (wait_rc == WAIT_OBJECT_0 && available == 0) {
+            break;
+        }
+        if (wait_rc == WAIT_FAILED) {
+            last_error = GetLastError();
+            goto done;
+        }
+        if (GetTickCount() - start_tick > PROCESS_CAPTURE_TIMEOUT_MS) {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 2000);
+            last_error = ERROR_TIMEOUT;
+            goto done;
+        }
+        Sleep(20);
     }
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
     if (!GetExitCodeProcess(pi.hProcess, exit_code)) {
         last_error = GetLastError();
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
         goto done;
     }
 
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
     if (convert_process_output(raw, raw_used, stdout_buf, stdout_chars) != 0) {
         last_error = GetLastError();
         goto done;
@@ -188,6 +238,15 @@ done:
     }
     if (write_pipe != NULL) {
         CloseHandle(write_pipe);
+    }
+    if (stdin_null != NULL) {
+        CloseHandle(stdin_null);
+    }
+    if (pi.hThread != NULL) {
+        CloseHandle(pi.hThread);
+    }
+    if (pi.hProcess != NULL) {
+        CloseHandle(pi.hProcess);
     }
     free(cmd_copy);
     free(raw);
