@@ -244,9 +244,11 @@ done:
     }
     if (pi.hThread != NULL) {
         CloseHandle(pi.hThread);
+        pi.hThread = NULL;
     }
     if (pi.hProcess != NULL) {
         CloseHandle(pi.hProcess);
+        pi.hProcess = NULL;
     }
     free(cmd_copy);
     free(raw);
