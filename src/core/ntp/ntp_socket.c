@@ -5,6 +5,41 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+static volatile LONG g_wsa_init_state = 0; /* 0=uninitialized, 1=initializing, 2=ready, -1=failed */
+
+static int ensure_wsa_initialized(void)
+{
+    LONG state = InterlockedCompareExchange(&g_wsa_init_state, 0, 0);
+    WSADATA wsa;
+
+    if (state == 2) {
+        return 0;
+    }
+    if (state == -1) {
+        return -1;
+    }
+
+    if (InterlockedCompareExchange(&g_wsa_init_state, 1, 0) == 0) {
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
+            InterlockedExchange(&g_wsa_init_state, 2);
+            return 0;
+        }
+        InterlockedExchange(&g_wsa_init_state, -1);
+        return -1;
+    }
+
+    for (;;) {
+        state = InterlockedCompareExchange(&g_wsa_init_state, 0, 0);
+        if (state == 2) {
+            return 0;
+        }
+        if (state == -1) {
+            return -1;
+        }
+        Sleep(0);
+    }
+}
+
 static int map_wsa_timeout(int rc)
 {
     if (rc == SOCKET_ERROR) {
@@ -104,7 +139,6 @@ int gw_ntp_socket_send_checker(
     int *response_bytes,
     gw_ntp_socket_error_t *error_out)
 {
-    WSADATA wsa;
     ADDRINFOA hints;
     ADDRINFOA *resolved = NULL;
     ADDRINFOA *it = NULL;
@@ -136,7 +170,7 @@ int gw_ntp_socket_send_checker(
         }
     }
 
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+    if (ensure_wsa_initialized() != 0) {
         if (error_out != NULL) {
             *error_out = GW_NTP_SOCKET_IO;
         }
@@ -185,6 +219,5 @@ cleanup:
     if (resolved != NULL) {
         FreeAddrInfoA(resolved);
     }
-    WSACleanup();
     return ok;
 }
