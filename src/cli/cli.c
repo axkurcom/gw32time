@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 #include <windows.h>
+#include <process.h>
 
 #include "format.h"
 
@@ -152,7 +153,7 @@ typedef struct checker_task {
     HANDLE thread;
 } checker_task_t;
 
-static DWORD WINAPI checker_worker(LPVOID param)
+static unsigned __stdcall checker_worker(void *param)
 {
     checker_task_t *task = (checker_task_t *)param;
 
@@ -258,7 +259,7 @@ static int checker_command(int argc, wchar_t **argv)
 
     if (parallel) {
         for (i = 0; i < task_count; i++) {
-            tasks[i].thread = CreateThread(NULL, 0, checker_worker, &tasks[i], 0, NULL);
+            tasks[i].thread = (HANDLE)_beginthreadex(NULL, 0, checker_worker, &tasks[i], 0, NULL);
         }
         for (i = 0; i < task_count; i++) {
             if (tasks[i].thread != NULL) {

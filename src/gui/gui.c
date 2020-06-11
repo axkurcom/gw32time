@@ -10,6 +10,7 @@
 #include <string.h>
 #include <wincrypt.h>
 #include <aclapi.h>
+#include <process.h>
 
 #include "resource.h"
 #include "../core/config_file.h"
@@ -2120,7 +2121,7 @@ static void apply_servers(HWND dialog)
     refresh_status(dialog);
 }
 
-static DWORD WINAPI probe_all_thread_proc(LPVOID param)
+static unsigned __stdcall probe_all_thread_proc(void *param)
 {
     probe_run_ctx_t *ctx = (probe_run_ctx_t *)param;
     int i;
@@ -2286,7 +2287,7 @@ static void start_probe_all_async(HWND dialog)
         ctx->rows[i] = g_rows[i];
     }
 
-    g_probe_thread = CreateThread(NULL, 0, probe_all_thread_proc, ctx, 0, NULL);
+    g_probe_thread = (HANDLE)_beginthreadex(NULL, 0, probe_all_thread_proc, ctx, 0, NULL);
     if (g_probe_thread == NULL) {
         CloseHandle(ctx->cancel_event);
         ctx->cancel_event = NULL;
