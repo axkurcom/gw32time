@@ -30,6 +30,20 @@ static int with_systemtime_privilege(BOOL enable)
     return ok ? 0 : -1;
 }
 
+int time_set_can_adjust(void)
+{
+    DWORD err = ERROR_SUCCESS;
+
+    if (with_systemtime_privilege(TRUE) != 0) {
+        return -1;
+    }
+    if (with_systemtime_privilege(FALSE) != 0) {
+        err = GetLastError();
+    }
+    SetLastError(err);
+    return 0;
+}
+
 int time_set_local(const SYSTEMTIME *st)
 {
     if (st == NULL) {

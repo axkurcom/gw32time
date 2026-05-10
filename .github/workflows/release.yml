@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must look like 1.2.3, got '${version}'" >&2
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Install MinGW toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-mingw-w64-i686 \
+            gcc-mingw-w64-i686 \
+            make
+
+      - name: Build
+        run: make VERSION="${VERSION}"
+
+      - name: Verify
+        run: make VERSION="${VERSION}" verify
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp gw32time.exe dist/gw32time.exe
+          sha256sum dist/gw32time.exe > dist/gw32time.exe.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gw32time-${{ env.VERSION }}
+          path: dist/*
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: GW32TIME ${{ env.VERSION }}
+          files: dist/*

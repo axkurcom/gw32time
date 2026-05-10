@@ -1,0 +1,27 @@
+# Build directories
+/build/
+/dist/
+/release/
+
+# Built binaries and release packages
+/*.exe
+/*.dll
+/*.zip
+/*.7z
+/*.tar
+/*.tar.gz
+/*.sha256
+
+# Compiler, linker, and resource outputs
+*.o
+*.obj
+*.a
+*.lib
+*.res
+*.pdb
+*.ilk
+*.map
+*.exp
+
+# Local build logs
+*.log

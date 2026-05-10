@@ -2,8 +2,10 @@ CC := i686-w64-mingw32-gcc
 WINDRES := i686-w64-mingw32-windres
 STRIP := i686-w64-mingw32-strip
 
+VERSION ?= 0.0.1
 TARGET := gw32time.exe
 RES := src/gui/resources.o
+VERSION_STAMP := build/version-$(VERSION).stamp
 SRC := \
 	src/main.c \
 	src/cli/cli.c \
@@ -31,7 +33,8 @@ SRC := \
 
 CFLAGS := -std=c99 -Wall -Wextra -Werror -Os -march=i686 -mno-sse -mno-sse2 -mno-mmx -mfpmath=387 \
 	-ffunction-sections -fdata-sections -DWINVER=0x0501 -D_WIN32_WINNT=0x0501 \
-	-DNTDDI_VERSION=0x05010000 -DUNICODE -D_UNICODE
+	-DNTDDI_VERSION=0x05010000 -DUNICODE -D_UNICODE \
+	-DGW32TIME_VERSION_A=\"$(VERSION)\" -DGW32TIME_VERSION_W=L\"$(VERSION)\"
 LDFLAGS := -municode -Wl,--gc-sections -Wl,--major-subsystem-version,5 -Wl,--minor-subsystem-version,1 \
 	-ladvapi32 -lcomctl32 -lcomdlg32 -lgdi32 -lnetapi32 -lshell32 -lws2_32
 
@@ -39,15 +42,21 @@ LDFLAGS := -municode -Wl,--gc-sections -Wl,--major-subsystem-version,5 -Wl,--min
 
 all: $(TARGET)
 
-$(TARGET): $(SRC) $(RES)
+$(TARGET): $(SRC) $(RES) $(VERSION_STAMP)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(RES) $(LDFLAGS)
 	$(STRIP) --strip-all $@
 
 $(RES): src/gui/resources.rc src/gui/resource.h
 	$(WINDRES) -O coff -o $@ src/gui/resources.rc
 
+$(VERSION_STAMP):
+	mkdir -p build
+	rm -f build/version-*.stamp
+	printf '%s\n' '$(VERSION)' > $@
+
 clean:
 	rm -f $(TARGET) $(RES)
+	rm -f build/version-*.stamp
 
 verify: $(TARGET)
 	i686-w64-mingw32-objdump -x $(TARGET) | grep -E "MajorSubsystemVersion|MinorSubsystemVersion"

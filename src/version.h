@@ -1,0 +1,16 @@
+#ifndef GW32TIME_VERSION_H
+#define GW32TIME_VERSION_H
+
+#ifndef GW32TIME_VERSION_A
+#define GW32TIME_VERSION_A "0.0.1"
+#endif
+
+#ifndef GW32TIME_VERSION_W
+#define GW32TIME_VERSION_W L"0.0.1"
+#endif
+
+#ifndef GW32TIME_TITLE_A
+#define GW32TIME_TITLE_A "GW32TIME 0.0.1"
+#endif
+
+#endif

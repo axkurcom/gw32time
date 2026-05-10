@@ -22,8 +22,8 @@
 #include "../core/w32time.h"
 #include "../core/w32tm.h"
 #include "../gui/gui.h"
+#include "../version.h"
 
-#define GW32TIME_VERSION L"0.0.1"
 #define HELPER_PROTO_MAX_FIELD_CHARS 1024
 
 enum {
@@ -51,7 +51,7 @@ static int arg_is(const wchar_t *arg, const wchar_t *value)
 static void print_version(void)
 {
     format_title();
-    wprintf(L"Version %ls\n", GW32TIME_VERSION);
+    wprintf(L"Version %ls\n", GW32TIME_VERSION_W);
 }
 
 static void print_help(void)
@@ -786,7 +786,7 @@ static int run_internal_set_poll(int argc, wchar_t **argv)
 
 static int run_internal_uac_ping(void)
 {
-    return 0;
+    return time_set_can_adjust() == 0 ? 0 : 5;
 }
 
 static int pipe_write_all(HANDLE pipe, const void *buf, DWORD size)

@@ -23,6 +23,7 @@
 #include "../core/time_set.h"
 #include "../core/w32time.h"
 #include "../core/w32tm.h"
+#include "../version.h"
 
 #define SERVER_MAX_ROWS NTP_MAX_PEERS
 #define FLAG_MASK_VALID 0x0f
@@ -44,6 +45,7 @@
 #define REALTIME_MAX_SECONDS 3600
 #define HELPER_PROTO_MAX_FIELD_CHARS 1024
 #define HELPER_EXIT_REPLY_TIMEOUT_MS 800
+#define HELPER_CONNECT_TIMEOUT_MS 15000
 
 enum {
     HELPER_OP_EXIT = 0,
@@ -150,6 +152,7 @@ static int g_sync_burst_remaining = 0;
 static int g_poll_updating = 0;
 static server_row_t g_rows[SERVER_MAX_ROWS];
 static int g_row_count = 0;
+static HFONT g_set_time_separator_font = NULL;
 static int selected_row(HWND dialog);
 static void start_probe_all_async(HWND dialog);
 static void update_admin_controls(HWND dialog);
@@ -168,8 +171,9 @@ static void close_elevated_helper(void);
 static void drain_probe_messages(HWND dialog);
 static void request_probe_cancel(void);
 static void wait_probe_thread_briefly(void);
+static LRESULT CALLBACK set_time_edit_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 static int random_bytes(unsigned char *buf, DWORD size);
-static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out);
+static int helper_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out);
 static int verify_helper_pipe_client(HANDLE pipe, HANDLE helper_process);
 
 static int random_bytes(unsigned char *buf, DWORD size)
@@ -190,14 +194,12 @@ static int random_bytes(unsigned char *buf, DWORD size)
     return 0;
 }
 
-static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out)
+static int helper_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *sid_out)
 {
-    HANDLE token = NULL;
-    DWORD token_size = 0;
-    TOKEN_USER *token_user = NULL;
     EXPLICIT_ACCESSW ea;
     PACL acl = NULL;
     PSID sid = NULL;
+    SID_IDENTIFIER_AUTHORITY world_auth = SECURITY_WORLD_SID_AUTHORITY;
     DWORD rc;
 
     if (sa == NULL || acl_out == NULL || sid_out == NULL) {
@@ -206,36 +208,7 @@ static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *si
     *acl_out = NULL;
     *sid_out = NULL;
 
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-        return -1;
-    }
-    GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
-    if (token_size == 0) {
-        CloseHandle(token);
-        return -1;
-    }
-    token_user = (TOKEN_USER *)malloc(token_size);
-    if (token_user == NULL) {
-        CloseHandle(token);
-        SetLastError(ERROR_OUTOFMEMORY);
-        return -1;
-    }
-    if (!GetTokenInformation(token, TokenUser, token_user, token_size, &token_size)) {
-        free(token_user);
-        CloseHandle(token);
-        return -1;
-    }
-    sid = (PSID)malloc(GetLengthSid(token_user->User.Sid));
-    if (sid == NULL) {
-        free(token_user);
-        CloseHandle(token);
-        SetLastError(ERROR_OUTOFMEMORY);
-        return -1;
-    }
-    if (!CopySid(GetLengthSid(token_user->User.Sid), sid, token_user->User.Sid)) {
-        free(sid);
-        free(token_user);
-        CloseHandle(token);
+    if (!AllocateAndInitializeSid(&world_auth, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &sid)) {
         return -1;
     }
     ZeroMemory(&ea, sizeof(ea));
@@ -243,13 +216,11 @@ static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *si
     ea.grfAccessMode = SET_ACCESS;
     ea.grfInheritance = NO_INHERITANCE;
     ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
     ea.Trustee.ptstrName = (LPWSTR)sid;
     rc = SetEntriesInAclW(1, &ea, NULL, &acl);
-    free(token_user);
-    CloseHandle(token);
     if (rc != ERROR_SUCCESS) {
-        free(sid);
+        FreeSid(sid);
         SetLastError(rc);
         return -1;
     }
@@ -260,7 +231,7 @@ static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *si
     sa->lpSecurityDescriptor = LocalAlloc(LPTR, SECURITY_DESCRIPTOR_MIN_LENGTH);
     if (sa->lpSecurityDescriptor == NULL) {
         LocalFree(acl);
-        free(sid);
+        FreeSid(sid);
         SetLastError(ERROR_OUTOFMEMORY);
         return -1;
     }
@@ -269,7 +240,7 @@ static int current_user_pipe_sa(SECURITY_ATTRIBUTES *sa, PACL *acl_out, PSID *si
         LocalFree(sa->lpSecurityDescriptor);
         sa->lpSecurityDescriptor = NULL;
         LocalFree(acl);
-        free(sid);
+        FreeSid(sid);
         return -1;
     }
 
@@ -524,13 +495,12 @@ static void refresh_datetime_block(HWND dialog)
 {
     wchar_t current[64];
     wchar_t uac[16];
-    int is_admin = 0;
 
     format_local_time_text(current, sizeof(current) / sizeof(current[0]));
     set_text(dialog, IDC_CURRENT_TIME, current);
     layout_header_time(dialog);
 
-    if (privilege_is_admin(&is_admin) == 0 && is_admin) {
+    if (time_set_can_adjust() == 0) {
         g_is_admin = 1;
     } else {
         g_is_admin = 0;
@@ -633,6 +603,43 @@ static int send_helper_request(HANDLE pipe, DWORD opcode, const wchar_t *arg1, c
     return 0;
 }
 
+static int wait_for_helper_connection(HANDLE pipe, HANDLE helper_process)
+{
+    DWORD mode;
+    DWORD waited = 0;
+    DWORD last_error;
+
+    for (;;) {
+        if (ConnectNamedPipe(pipe, NULL)) {
+            break;
+        }
+        last_error = GetLastError();
+        if (last_error == ERROR_PIPE_CONNECTED) {
+            break;
+        }
+        if (last_error != ERROR_PIPE_LISTENING) {
+            SetLastError(last_error);
+            return -1;
+        }
+        if (helper_process != NULL && WaitForSingleObject(helper_process, 0) == WAIT_OBJECT_0) {
+            SetLastError(ERROR_BROKEN_PIPE);
+            return -1;
+        }
+        if (waited >= HELPER_CONNECT_TIMEOUT_MS) {
+            SetLastError(ERROR_TIMEOUT);
+            return -1;
+        }
+        Sleep(20);
+        waited += 20;
+    }
+
+    mode = PIPE_READMODE_MESSAGE | PIPE_WAIT;
+    if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
+        return -1;
+    }
+    return 0;
+}
+
 static void try_send_helper_exit_nohang(void)
 {
     helper_frame_header_t hdr;
@@ -720,14 +727,14 @@ static int ensure_elevated_helper(HWND dialog)
     pipe_name[(sizeof(pipe_name) / sizeof(pipe_name[0])) - 1] = L'\0';
     _snwprintf(params, sizeof(params) / sizeof(params[0]), L"__helper \"%ls\"", pipe_name);
     params[(sizeof(params) / sizeof(params[0])) - 1] = L'\0';
-    if (current_user_pipe_sa(&sa, &pipe_acl, &pipe_sid) != 0) {
+    if (helper_pipe_sa(&sa, &pipe_acl, &pipe_sid) != 0) {
         return -1;
     }
 
     g_helper_pipe = CreateNamedPipeW(
         pipe_name,
         PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
         1,
         sizeof(DWORD),
         2048 * sizeof(wchar_t),
@@ -738,7 +745,7 @@ static int ensure_elevated_helper(HWND dialog)
         LocalFree(pipe_acl);
     }
     if (pipe_sid != NULL) {
-        free(pipe_sid);
+        FreeSid(pipe_sid);
     }
     if (g_helper_pipe == INVALID_HANDLE_VALUE) {
         return -1;
@@ -768,15 +775,13 @@ static int ensure_elevated_helper(HWND dialog)
         return -1;
     }
 
-    if (!ConnectNamedPipe(g_helper_pipe, NULL)) {
+    if (wait_for_helper_connection(g_helper_pipe, sei.hProcess) != 0) {
         last_error = GetLastError();
-        if (last_error != ERROR_PIPE_CONNECTED) {
-            CloseHandle(g_helper_pipe);
-            g_helper_pipe = INVALID_HANDLE_VALUE;
-            CloseHandle(sei.hProcess);
-            SetLastError(last_error);
-            return -1;
-        }
+        CloseHandle(g_helper_pipe);
+        g_helper_pipe = INVALID_HANDLE_VALUE;
+        CloseHandle(sei.hProcess);
+        SetLastError(last_error);
+        return -1;
     }
     if (verify_helper_pipe_client(g_helper_pipe, sei.hProcess) != 0) {
         last_error = GetLastError();
@@ -787,7 +792,6 @@ static int ensure_elevated_helper(HWND dialog)
         return -1;
     }
     g_helper_process = sei.hProcess;
-    g_helper_uac_ok = 1;
     return 0;
 }
 
@@ -808,6 +812,11 @@ static int run_elevated_helper(HWND dialog, DWORD opcode, const wchar_t *arg1, c
             close_elevated_helper();
             return -1;
         }
+    }
+    if ((opcode == HELPER_OP_UAC_PING || opcode == HELPER_OP_SET_TIME) && exit_code == 0) {
+        g_helper_uac_ok = 1;
+    } else if (opcode == HELPER_OP_UAC_PING) {
+        close_elevated_helper();
     }
     return (int)exit_code;
 }
@@ -843,6 +852,29 @@ static HFONT ensure_bold_font(void)
     lf.lfWeight = FW_BOLD;
     g_bold_font = CreateFontIndirectW(&lf);
     return g_bold_font;
+}
+
+static HFONT ensure_set_time_separator_font(void)
+{
+    LOGFONTW lf;
+    HFONT base_font;
+
+    if (g_set_time_separator_font != NULL) {
+        return g_set_time_separator_font;
+    }
+
+    base_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    if (base_font == NULL || GetObjectW(base_font, sizeof(lf), &lf) == 0) {
+        return NULL;
+    }
+    lf.lfWeight = FW_BOLD;
+    if (lf.lfHeight < 0) {
+        lf.lfHeight -= 7;
+    } else {
+        lf.lfHeight += 7;
+    }
+    g_set_time_separator_font = CreateFontIndirectW(&lf);
+    return g_set_time_separator_font;
 }
 
 static void layout_header_time(HWND dialog)
@@ -958,6 +990,122 @@ static int normalize_time_field(HWND dialog, int id)
     return 0;
 }
 
+static int is_set_time_field_id(int id)
+{
+    return id == IDC_SET_YEAR_VALUE ||
+        id == IDC_SET_MONTH_VALUE ||
+        id == IDC_SET_DAY_VALUE ||
+        id == IDC_SET_HOUR_VALUE ||
+        id == IDC_SET_MINUTE_VALUE ||
+        id == IDC_SET_SECOND_VALUE;
+}
+
+static int set_time_field_is_locked(const set_time_dialog_ctx_t *ctx, int id)
+{
+    if (ctx == NULL) {
+        return 0;
+    }
+    if (id == IDC_SET_YEAR_VALUE) {
+        return ctx->year_locked;
+    }
+    if (id == IDC_SET_MONTH_VALUE) {
+        return ctx->month_locked;
+    }
+    if (id == IDC_SET_DAY_VALUE) {
+        return ctx->day_locked;
+    }
+    if (id == IDC_SET_HOUR_VALUE) {
+        return ctx->hour_locked;
+    }
+    if (id == IDC_SET_MINUTE_VALUE) {
+        return ctx->minute_locked;
+    }
+    if (id == IDC_SET_SECOND_VALUE) {
+        return ctx->second_locked;
+    }
+    return 0;
+}
+
+static void set_time_field_locked(set_time_dialog_ctx_t *ctx, int id)
+{
+    if (ctx == NULL) {
+        return;
+    }
+    if (id == IDC_SET_YEAR_VALUE) {
+        ctx->year_locked = 1;
+    } else if (id == IDC_SET_MONTH_VALUE) {
+        ctx->month_locked = 1;
+    } else if (id == IDC_SET_DAY_VALUE) {
+        ctx->day_locked = 1;
+    } else if (id == IDC_SET_HOUR_VALUE) {
+        ctx->hour_locked = 1;
+    } else if (id == IDC_SET_MINUTE_VALUE) {
+        ctx->minute_locked = 1;
+    } else if (id == IDC_SET_SECOND_VALUE) {
+        ctx->second_locked = 1;
+    }
+}
+
+static void clear_set_time_initial_value(HWND edit)
+{
+    HWND dialog = GetParent(edit);
+    set_time_dialog_ctx_t *ctx;
+    int id;
+
+    if (dialog == NULL) {
+        return;
+    }
+    ctx = (set_time_dialog_ctx_t *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
+    id = GetDlgCtrlID(edit);
+    if (ctx == NULL || ctx->refreshing || !is_set_time_field_id(id) || set_time_field_is_locked(ctx, id)) {
+        return;
+    }
+
+    ctx->refreshing = 1;
+    SetWindowTextW(edit, L"");
+    ctx->refreshing = 0;
+    set_time_field_locked(ctx, id);
+}
+
+static LRESULT CALLBACK set_time_edit_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    WNDPROC old_proc = (WNDPROC)GetPropW(hwnd, L"GW32TIME_SET_TIME_EDIT_PROC");
+
+    if (old_proc == NULL) {
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    if (message == WM_CHAR) {
+        if (wparam >= 0x20 || wparam == VK_BACK) {
+            clear_set_time_initial_value(hwnd);
+        }
+    } else if (message == WM_PASTE) {
+        clear_set_time_initial_value(hwnd);
+    } else if (message == WM_NCDESTROY) {
+        RemovePropW(hwnd, L"GW32TIME_SET_TIME_EDIT_PROC");
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)old_proc);
+    }
+
+    return CallWindowProcW(old_proc, hwnd, message, wparam, lparam);
+}
+
+static void subclass_set_time_field(HWND dialog, int id)
+{
+    HWND edit = GetDlgItem(dialog, id);
+    WNDPROC old_proc;
+
+    if (edit == NULL || GetPropW(edit, L"GW32TIME_SET_TIME_EDIT_PROC") != NULL) {
+        return;
+    }
+
+    old_proc = (WNDPROC)GetWindowLongPtrW(edit, GWLP_WNDPROC);
+    if (old_proc == NULL) {
+        return;
+    }
+    SetPropW(edit, L"GW32TIME_SET_TIME_EDIT_PROC", (HANDLE)old_proc);
+    SetWindowLongPtrW(edit, GWLP_WNDPROC, (LONG_PTR)set_time_edit_proc);
+}
+
 static void set_time_dialog_values(HWND dialog, const SYSTEMTIME *st, set_time_dialog_ctx_t *ctx)
 {
     if (st == NULL) {
@@ -1008,6 +1156,7 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
     case WM_INITDIALOG: {
         SYSTEMTIME st;
         HFONT bold_font;
+        HFONT separator_font;
 
         SetWindowLongPtrW(dialog, GWLP_USERDATA, lparam);
         ctx = (set_time_dialog_ctx_t *)lparam;
@@ -1033,6 +1182,25 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             SendDlgItemMessageW(dialog, IDC_SET_MINUTE_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
             SendDlgItemMessageW(dialog, IDC_SET_SECOND_VALUE, WM_SETFONT, (WPARAM)bold_font, TRUE);
         }
+        SendDlgItemMessageW(dialog, IDC_SET_YEAR_VALUE, EM_SETLIMITTEXT, 4, 0);
+        SendDlgItemMessageW(dialog, IDC_SET_MONTH_VALUE, EM_SETLIMITTEXT, 2, 0);
+        SendDlgItemMessageW(dialog, IDC_SET_DAY_VALUE, EM_SETLIMITTEXT, 2, 0);
+        SendDlgItemMessageW(dialog, IDC_SET_HOUR_VALUE, EM_SETLIMITTEXT, 2, 0);
+        SendDlgItemMessageW(dialog, IDC_SET_MINUTE_VALUE, EM_SETLIMITTEXT, 2, 0);
+        SendDlgItemMessageW(dialog, IDC_SET_SECOND_VALUE, EM_SETLIMITTEXT, 2, 0);
+        separator_font = ensure_set_time_separator_font();
+        if (separator_font != NULL) {
+            SendDlgItemMessageW(dialog, IDC_SET_DATE_SEP1, WM_SETFONT, (WPARAM)separator_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_DATE_SEP2, WM_SETFONT, (WPARAM)separator_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_TIME_SEP1, WM_SETFONT, (WPARAM)separator_font, TRUE);
+            SendDlgItemMessageW(dialog, IDC_SET_TIME_SEP2, WM_SETFONT, (WPARAM)separator_font, TRUE);
+        }
+        subclass_set_time_field(dialog, IDC_SET_YEAR_VALUE);
+        subclass_set_time_field(dialog, IDC_SET_MONTH_VALUE);
+        subclass_set_time_field(dialog, IDC_SET_DAY_VALUE);
+        subclass_set_time_field(dialog, IDC_SET_HOUR_VALUE);
+        subclass_set_time_field(dialog, IDC_SET_MINUTE_VALUE);
+        subclass_set_time_field(dialog, IDC_SET_SECOND_VALUE);
         return TRUE;
     }
     case WM_COMMAND:
@@ -1051,19 +1219,7 @@ static INT_PTR CALLBACK set_time_dialog_proc(HWND dialog, UINT message, WPARAM w
             return TRUE;
         }
         if (ctx != NULL && !ctx->refreshing && HIWORD(wparam) == EN_CHANGE) {
-            if (LOWORD(wparam) == IDC_SET_YEAR_VALUE) {
-                ctx->year_locked = 1;
-            } else if (LOWORD(wparam) == IDC_SET_MONTH_VALUE) {
-                ctx->month_locked = 1;
-            } else if (LOWORD(wparam) == IDC_SET_DAY_VALUE) {
-                ctx->day_locked = 1;
-            } else if (LOWORD(wparam) == IDC_SET_HOUR_VALUE) {
-                ctx->hour_locked = 1;
-            } else if (LOWORD(wparam) == IDC_SET_MINUTE_VALUE) {
-                ctx->minute_locked = 1;
-            } else if (LOWORD(wparam) == IDC_SET_SECOND_VALUE) {
-                ctx->second_locked = 1;
-            }
+            set_time_field_locked(ctx, LOWORD(wparam));
         }
         if (HIWORD(wparam) == EN_KILLFOCUS) {
             normalize_time_field(dialog, LOWORD(wparam));
@@ -1132,16 +1288,23 @@ static void set_local_datetime(HWND dialog)
 {
     set_time_dialog_ctx_t ctx;
     int rc;
-    int is_admin = 0;
+    int can_adjust = 0;
 
     ZeroMemory(&ctx, sizeof(ctx));
 
-    if (privilege_is_admin(&is_admin) != 0 || !is_admin) {
-        rc = ensure_elevated_helper(dialog);
+    can_adjust = (time_set_can_adjust() == 0);
+    if (!can_adjust) {
+        rc = run_elevated_helper(dialog, HELPER_OP_UAC_PING, NULL, NULL);
         if (rc != 0) {
+            MessageBoxW(
+                dialog,
+                L"The current or selected elevated account cannot change the system time.",
+                L"GW32TIME",
+                MB_ICONERROR);
             bump_main_window_layer(dialog);
             return;
         }
+        can_adjust = 0;
         refresh_datetime_block(dialog);
     }
 
@@ -1151,7 +1314,7 @@ static void set_local_datetime(HWND dialog)
         return;
     }
 
-    if (privilege_is_admin(&is_admin) == 0 && is_admin) {
+    if (can_adjust) {
         rc = time_set_local(&ctx.selected);
     } else {
         rc = run_elevated_set_time(dialog, &ctx.selected);
@@ -1160,6 +1323,8 @@ static void set_local_datetime(HWND dialog)
     if (rc == 0) {
         refresh_datetime_block(dialog);
         MessageBoxW(dialog, L"Local date/time updated.", L"GW32TIME", MB_ICONINFORMATION);
+    } else {
+        MessageBoxW(dialog, L"Could not update local date/time.", L"GW32TIME", MB_ICONERROR);
     }
     bump_main_window_layer(dialog);
 }
@@ -2361,6 +2526,7 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
     switch (message) {
     case WM_INITDIALOG:
         g_main_dialog = dialog;
+        SetWindowTextW(dialog, L"GW32TIME " GW32TIME_VERSION_W);
         bump_main_window_layer(dialog);
         init_servers_table(dialog);
         SendDlgItemMessageW(dialog, IDC_POLL_SPIN, UDM_SETRANGE32, 1, 604800);
@@ -2452,6 +2618,12 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
                 int rc = run_elevated_helper(dialog, HELPER_OP_UAC_PING, NULL, NULL);
                 if (rc == 0) {
                     refresh_datetime_block(dialog);
+                } else {
+                    MessageBoxW(
+                        dialog,
+                        L"The selected elevated account cannot change the system time.",
+                        L"GW32TIME",
+                        MB_ICONERROR);
                 }
                 return TRUE;
             }
@@ -2633,6 +2805,10 @@ static INT_PTR CALLBACK main_dialog_proc(HWND dialog, UINT message, WPARAM wpara
         if (g_bold_font != NULL) {
             DeleteObject(g_bold_font);
             g_bold_font = NULL;
+        }
+        if (g_set_time_separator_font != NULL) {
+            DeleteObject(g_set_time_separator_font);
+            g_set_time_separator_font = NULL;
         }
         return TRUE;
     default:
