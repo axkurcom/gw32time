@@ -7,6 +7,9 @@ servers, testing NTP quality, changing manual peers, applying safe presets,
 backing up/restoring configuration, adjusting polling, requesting resync, and
 setting the local date/time.
 
+<img width="1057" height="429" alt="gw32time in Windows 10" src="https://github.com/user-attachments/assets/9828f5b0-787c-4138-ad94-bfcf9684a82c" />
+
+
 The project targets old and constrained Windows systems as well as modern
 systems. The default build produces a 32-bit Windows executable with an XP-era
 subsystem version and avoids SIMD instructions.
