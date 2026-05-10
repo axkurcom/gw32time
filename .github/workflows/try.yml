@@ -45,4 +45,4 @@ jobs:
             ripgrep
 
       - name: Tests
-        run: scripts/smoke/run.sh
+        run: bash scripts/smoke/run.sh
