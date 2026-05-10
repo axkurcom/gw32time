@@ -22,7 +22,10 @@ jobs:
             make
 
       - name: Test build
-        run: make test-build
+        run: |
+          mkdir -p build
+          make clean
+          make TARGET=build/gw32time-test.exe STRIP=:
 
   smoke:
     name: Smoke Tests
@@ -42,4 +45,4 @@ jobs:
             ripgrep
 
       - name: Tests
-        run: make smoke
+        run: scripts/smoke/run.sh
